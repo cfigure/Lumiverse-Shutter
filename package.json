@@ -1,0 +1,9 @@
+{
+  "name": "shutter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts --outdir dist --target browser"
+  }
+}

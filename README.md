@@ -1,6 +1,6 @@
 # Shutter
 
-A Lumiverse (https://github.com/prolix-oc/Lumiverse) extension that provides quick-access image generation for ImageGen with configurable insert behaviour.
+A [Lumiverse](https://github.com/prolix-oc/Lumiverse) extension that provides quick-access image generation for ImageGen with configurable insert behaviour.
 
 ## Summary
 

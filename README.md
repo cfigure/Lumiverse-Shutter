@@ -11,7 +11,7 @@ What happens after generation depends on how ImageGen is configured:
 - **Preview only and Set as background** - Messages are added to the last message in the chat. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same, my recommendation would be to leave it on 'Preview only', but both work. 
 - **Insert into chat** — Press the button, and ImageGen creates the message with the image attached natively, so there's nothing more to do.
 
-Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex] (Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
+Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
 
 ### Auto Generate
 

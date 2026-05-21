@@ -60,7 +60,7 @@ If you're using Minimal chat layout, replace `BubbleMessage` with `MinimalMessag
 
 ## Compatibility
 
-Shutter requires Lumiverse on the `staging` branch at commit [`1f7c821`](https://github.com/prolix-oc/Lumiverse/commit/1f7c8215c246d070c3a1e80a989b1aa4792cf61c) or later.
+Shutter requires Lumiverse on the `staging` branch at commit [`3a241c8`](https://github.com/prolix-oc/Lumiverse/commit/3a241c89caa22ba55d16ba7fc7c926d7ee7a9965) or later.
 
 ## Permissions
 

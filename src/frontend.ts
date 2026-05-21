@@ -254,7 +254,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="sh-setting-row">
         <div>
           <div class="sh-setting-label">Force Generation</div>
-          <div class="sh-setting-desc">Always generate regardless of scene changes. When off, generation is skipped if the scene hasn't changed enough.</div>
+          <div class="sh-setting-desc">Always request generation regardless of scene changes. When off, Lumiverse may skip generation if the scene hasn't changed enough.</div>
         </div>
         <input type="checkbox" id="sh-toggle-force" ${settings.forceGeneration ? 'checked' : ''} />
       </div>

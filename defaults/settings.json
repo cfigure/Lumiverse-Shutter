@@ -1,0 +1,14 @@
+{
+  "showFloatWidget": false,
+  "toastOnInsert": true,
+  "afterGenerate": "ask_to_insert",
+  "forceGeneration": true,
+  "widgetSize": "small",
+  "widgetStyle": "color",
+  "autoGenerate": "off",
+  "autoGenerateInterval": 3,
+  "autoGenerateRandomMin": 3,
+  "autoGenerateRandomMax": 7,
+  "autoGenerateAfter": "auto_insert",
+  "autoPreviewPrompt": false
+}

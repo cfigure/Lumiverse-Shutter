@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "type": "lumiverse_regex_scripts",
+  "scripts": [
+    {
+      "name": "Shutter",
+      "find_regex": "\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9\-]+\)",
+      "replace_string": "",
+      "flags": "gi",
+      "placement": [
+        "ai_output"
+      ],
+      "scope": "global",
+      "scope_id": null,
+      "target": "prompt",
+      "min_depth": null,
+      "max_depth": null,
+      "trim_strings": [],
+      "run_on_edit": false,
+      "substitute_macros": "none",
+      "disabled": false,
+      "sort_order": 0,
+      "description": "",
+      "metadata": {},
+      "folder": "Shutter",
+      "script_id": ""
+    }
+  ],
+  "exported_at": 1778716640
+}

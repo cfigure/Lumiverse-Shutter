@@ -9,13 +9,13 @@ Shutter adds a floating button and an input bar action that let you trigger imag
 What happens after generation depends on how ImageGen is configured:
 
 - **Preview only and Set as background** - Messages are added to the last message in the chat. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same, my recommendation would be to leave it on 'Preview only', but both work. 
-- **Insert into chat** — Press the button, and ImageGen creates the message with the image attached natively, so there's nothing more to do. Auto-generate is skipped when ImageGen is set to 'Insert into chat' mode, as Shutter focuses on inserting images inline within an existing message.
+- **Insert into chat / Attach to Last Message** — ImageGen handles image placement natively, so Shutter has nothing more to do. Auto-generate is skipped in these modes.
 
 Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
 
 ### Auto Generate
 
-Shutter can automatically trigger image generation after AI responses. Auto-generate is skipped when ImageGen is set to 'Insert into chat' mode.
+Shutter can automatically trigger image generation after AI responses. Auto-generate is skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" mode.
 
 There are three auto-generate modes:
 
@@ -27,11 +27,14 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 
 ## Settings
 
-- **Floating Button** — show a quick-access generate button on screen
+- **Floating Widget** — show a quick-access generate button on screen
 - **Widget Size** — size of the floating button (Small 44px / Medium 56px / Large 72px)
 - **Widget Style** — icon style for the floating button (Colour / Monochrome)
 - **Toast on Insert** — show a notification when an image is inserted into a message
-- **After Generate** — what to do after a manual generation (ask to insert / auto insert)
+- **Force Generation** — always generate regardless of scene changes, the same as Force Generate in the native ImageGen panel. When off, generation respects the scene change threshold. This is unlikely to be needed, but I have included it as v1.0.0 always went through as force generation, but practically it likely makes no difference. 
+- **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
+
+When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter will show a prompt preview modal before manual generations. You can review and edit the prompt, re-run the parser, or generate directly.
 
 ### Auto Generate Settings
 
@@ -39,10 +42,25 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Interval** — number of AI messages between generations (when mode is "Every X messages")
 - **Random Range** — min and max AI messages between generations (when mode is "Random interval")
 - **After Auto Generate** — what to do after an automatic generation (auto insert / ask to insert)
+- **Preview Prompt on Auto** — show the prompt preview modal for auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.
+
+When "Preview Prompt Before Generating" is enabled in native ImageGen settings and **Preview Prompt on Auto** is turned on, Shutter will also show the prompt preview modal for auto-generated images.
+
+
+## CSS Snippet
+Tiny little CSS snippet for centring images inserted into messages if you prefer that to the default left align. 
+
+If you're using Minimal chat layout, replace `BubbleMessage` with `MinimalMessage`
+
+```
+[data-component="BubbleMessage"] p:has(img[alt="shutter"]) {
+  text-align: center !important;
+}
+```
 
 ## Compatibility
 
-Shutter requires Lumiverse on the `staging` branch at commit [`1f7c821`](https://github.com/prolix-oc/Lumiverse/commit/1f7c8215c246d070c3a1e80a989b1aa4792cf61c) or later.
+Shutter requires Lumiverse on the `staging` branch at commit [`3a241c8`](https://github.com/prolix-oc/Lumiverse/commit/3a241c89caa22ba55d16ba7fc7c926d7ee7a9965) or later.
 
 ## Permissions
 

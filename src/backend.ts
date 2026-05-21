@@ -6,6 +6,7 @@ type Settings = {
   showFloatWidget: boolean
   toastOnInsert: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
+  forceGeneration: boolean
   widgetSize: 'small' | 'medium' | 'large'
   widgetStyle: 'color' | 'mono'
   autoGenerate: 'off' | 'every' | 'interval' | 'random'
@@ -13,6 +14,7 @@ type Settings = {
   autoGenerateRandomMin: number
   autoGenerateRandomMax: number
   autoGenerateAfter: 'auto_insert' | 'ask_to_insert'
+  autoPreviewPrompt: boolean
 }
 
 type FrontendMessage =
@@ -24,6 +26,7 @@ const DEFAULT_SETTINGS: Settings = {
   showFloatWidget: false,
   toastOnInsert: true,
   afterGenerate: 'ask_to_insert',
+  forceGeneration: true,
   widgetSize: 'small',
   widgetStyle: 'color',
   autoGenerate: 'off',
@@ -31,6 +34,7 @@ const DEFAULT_SETTINGS: Settings = {
   autoGenerateRandomMin: 3,
   autoGenerateRandomMax: 7,
   autoGenerateAfter: 'auto_insert',
+  autoPreviewPrompt: false,
 }
 
 // ── Validation ──
@@ -46,7 +50,8 @@ function validateSettings(s: Settings): Settings {
 // ── Storage ──
 
 async function loadSettings(userId?: string): Promise<Settings> {
-  return spindle.userStorage.getJson<Settings>('settings.json', { fallback: DEFAULT_SETTINGS, userId })
+  const saved = await spindle.userStorage.getJson<Partial<Settings>>('settings.json', { fallback: {}, userId })
+  return { ...DEFAULT_SETTINGS, ...saved }
 }
 
 async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<Settings> {
@@ -92,7 +97,7 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId) => {
         const target = messages.find(m => m.id === targetId)
         if (!target) { spindle.toast.error('Message not found.'); return }
 
-        const imageUrl = `/api/v1/images/${payload.imageId}`
+        const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
         await spindle.chat.updateMessage(payload.chatId, targetId, {
           content: target.content + `\n\n![shutter](${imageUrl})`,
         })

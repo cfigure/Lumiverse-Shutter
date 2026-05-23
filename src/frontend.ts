@@ -29,7 +29,6 @@ type GenerationResult = {
 const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72 }
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
-const NATIVE_SETTINGS_CACHE_MS = 5_000
 
 // ── Helpers ──
 
@@ -52,16 +51,14 @@ function parseErrorMessage(raw: string): string {
   return raw
 }
 
-function isInChatView(): boolean {
-  return /^\/chat\/[^/]+/.test(window.location.pathname)
-}
-
 // ── Setup ──
 
 export function setup(ctx: SpindleFrontendContext) {
 
   let settings: Settings | null = null
   let generating = false
+  let promptPreviewOpen = false
+  const pendingLastMessageRequests = new Map<string, { resolve: (value: string | undefined) => void; timeout: ReturnType<typeof setTimeout> }>()
   let floatWidget: SpindleFloatWidgetHandle | null = null
 
   // ── Auto-generate state ──
@@ -128,7 +125,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Permissions ──
 
   ctx.permissions.getGranted().then((granted: string[]) => {
-    const needed = ['chats', 'chat_mutation', 'ui_panels', 'generation']
+    const needed = ['chat_mutation', 'ui_panels', 'generation']
     const missing = needed.filter(p => !granted.includes(p))
     if (missing.length === 0) return
     ctx.ui.showConfirm({
@@ -137,28 +134,29 @@ export function setup(ctx: SpindleFrontendContext) {
       variant: 'info',
       confirmLabel: 'Grant',
       cancelLabel: 'Not Now',
-    }).then(({ confirmed }) => { if (confirmed) ctx.permissions.request(missing) })
+    }).then(({ confirmed }: { confirmed: boolean }) => {
+      if (!confirmed) return
+      ctx.permissions.request(missing).catch(() => {
+        ctx.ui.showConfirm({
+          title: 'Permissions Not Granted',
+          message: 'Shutter needs these permissions for its widget and inline-generation automation. You can grant them later from Lumiverse extension settings.',
+          variant: 'info',
+          confirmLabel: 'OK',
+          cancelLabel: 'Dismiss',
+        })
+      })
+    }).catch(() => { /* user dismissed the prompt */ })
   })
 
   // ── Styles ──
+  //
+  // Settings selects use native <select> matching SettingsModal.module.css
+  // Modal textareas and buttons match InputPromptModal.module.css
+  // Image preview matches ImageGenPanel.module.css
+  // Lightbox matches ImageLightbox.module.css
 
   const removeStyle = ctx.dom.addStyle(`
-    /* Settings panel */
-    .sh-settings { padding: 8px 16px 16px; }
-    .sh-heading { font-size: 15px; font-weight: 600; color: var(--lumiverse-text); margin-bottom: 4px; }
-    .sh-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
-    .sh-setting-label { font-size: 13px; color: var(--lumiverse-text); }
-    .sh-setting-desc { font-size: 11.5px; color: var(--lumiverse-text-muted); margin-top: 2px; }
-    .sh-select { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill); color: var(--lumiverse-text); font-size: 12px; font-family: inherit; cursor: pointer; min-width: 120px; flex-shrink: 0; }
-    .sh-select:focus { outline: none; border-color: var(--lumiverse-accent); }
-    .sh-input-num { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill); color: var(--lumiverse-text); font-size: 12px; font-family: inherit; width: 50px; text-align: center; }
-    .sh-input-num:focus { outline: none; border-color: var(--lumiverse-accent); }
-    .sh-range-row { display: flex; align-items: center; gap: 6px; }
-    .sh-range-label { font-size: 12px; color: var(--lumiverse-text-muted); }
-    .sh-divider { height: 1px; background: var(--lumiverse-border); margin: 10px 0; }
-    .sh-loading { padding: 16px; font-size: 13px; color: var(--lumiverse-text-muted); }
-
-    /* Float widget */
+    /* ── Float widget ── */
     .sh-float-btn { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; border: none; background: var(--lumiverse-accent); color: var(--lumiverse-accent-fg); border-radius: 50%; cursor: pointer; transition: opacity var(--lumiverse-transition-fast); }
     .sh-float-btn:hover { opacity: 0.85; }
     .sh-float-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -166,225 +164,367 @@ export function setup(ctx: SpindleFrontendContext) {
     .sh-float-btn.sh-generating svg { animation: sh-spin 1.2s linear infinite; }
     @keyframes sh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-    /* Modals (shared) */
-    .sh-modal-body { display: flex; flex-direction: column; gap: 12px; }
-    .sh-preview-img { width: 100%; max-height: 200px; object-fit: contain; border-radius: var(--lumiverse-radius); border: 1px solid var(--lumiverse-border); margin-bottom: 4px; cursor: pointer; transition: opacity var(--lumiverse-transition-fast); }
-    .sh-preview-img:hover { opacity: 0.85; }
-    .sh-lightbox { position: fixed; inset: 0; z-index: 99999; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-    .sh-lightbox img { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: var(--lumiverse-radius); }
-    .sh-dest-choices { display: flex; flex-direction: column; gap: 8px; }
-    .sh-dest-btn { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); background: var(--lumiverse-fill); color: var(--lumiverse-text); cursor: pointer; font-size: 13px; font-family: inherit; text-align: left; transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
-    .sh-dest-btn:hover { border-color: var(--lumiverse-accent); background: var(--lumiverse-fill-subtle); }
-    .sh-dest-label { font-weight: 500; }
-    .sh-dest-desc { font-size: 11.5px; color: var(--lumiverse-text-muted); margin-top: 2px; }
+    /* ── Settings panel ── */
+    .sh-settings { padding: 8px 16px 16px; }
+    .sh-settings-title { font-size: calc(15px * var(--lumiverse-font-scale, 1)); font-weight: 600; color: var(--lumiverse-text); margin-bottom: 8px; }
+    .sh-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+    .sh-setting-info { flex: 1; min-width: 0; }
+    .sh-setting-label { font-size: calc(13px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text); }
+    .sh-setting-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); margin-top: 2px; }
+    .sh-setting-control { flex-shrink: 0; }
+    .sh-auto-section { margin-top: 10px; }
+    .sh-range-row { display: flex; align-items: center; gap: 6px; }
+    .sh-range-label { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); }
 
-    /* Prompt preview modal */
-    .sh-prompt-subtitle { font-size: 12px; color: var(--lumiverse-text-muted); line-height: 1.4; margin-bottom: 4px; }
+    /* Native <select> — matches SettingsModal.module.css */
+    .sh-select { padding: 6px 10px; border-radius: 8px; background: var(--lumiverse-fill-subtle); border: 1px solid var(--lumiverse-border); color: var(--lumiverse-text); font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-family: inherit; outline: none; cursor: pointer; }
+    .sh-select:focus { border-color: var(--lumiverse-primary); }
+
+    /* Native <input type="number"> — matches SettingsModal style */
+    .sh-input-num { padding: 6px 10px; border-radius: 8px; background: var(--lumiverse-fill-subtle); border: 1px solid var(--lumiverse-border); color: var(--lumiverse-text); font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-family: inherit; width: 54px; text-align: center; outline: none; }
+    .sh-input-num:focus { border-color: var(--lumiverse-primary); }
+
+    /* ── Destination modal ── */
+    .sh-modal-body { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+    /* Image preview — matches ImageGenPanel.module.css */
+    .sh-preview { border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
+    .sh-preview img { display: block; width: 100%; max-height: 200px; object-fit: contain; }
+
+    /* Action buttons — matches FormComponents.module.css .btn */
+    .sh-dest-choices { display: flex; flex-direction: column; gap: 8px; }
+    .sh-dest-btn { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); cursor: pointer; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; font-family: inherit; text-align: left; transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
+    .sh-dest-btn:hover { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+    .sh-dest-label { font-weight: 500; color: var(--lumiverse-text); }
+    .sh-dest-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin-top: 2px; }
+
+    /* ── Lightbox — matches ImageLightbox.module.css ── */
+    .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }
+    [data-glass] .sh-lightbox { backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)); }
+    .sh-lightbox img { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: var(--lcs-radius-sm, 8px); cursor: default; }
+
+    /* ── Prompt preview modal — matches InputPromptModal.module.css ── */
+    .sh-prompt-subtitle { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin: 0; padding: 0; line-height: 1.5; }
+    .sh-prompt-body { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
     .sh-prompt-field { display: flex; flex-direction: column; gap: 4px; }
-    .sh-prompt-label { font-size: 11px; font-weight: 600; color: var(--lumiverse-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .sh-prompt-textarea { width: 100%; min-height: 140px; padding: 10px; border-radius: 6px; border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill); color: var(--lumiverse-text); font-size: 13px; font-family: inherit; resize: vertical; box-sizing: border-box; line-height: 1.5; }
-    .sh-prompt-textarea:focus { outline: none; border-color: var(--lumiverse-accent); }
+    .sh-prompt-label { font-size: calc(11px * var(--lumiverse-font-scale, 1)); font-weight: 600; color: var(--lumiverse-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* Textareas — matches InputPromptModal.module.css .textarea */
+    .sh-prompt-textarea { width: 100%; min-height: 120px; max-height: 200px; padding: 12px 14px; border-radius: var(--lcs-radius-sm, 8px); border: 1px solid var(--lumiverse-border); background: var(--lumiverse-bg-dark); color: var(--lumiverse-text); font-size: calc(13px * var(--lumiverse-font-scale, 1)); line-height: 1.5; resize: vertical; font-family: inherit; transition: border-color var(--lumiverse-transition-fast); box-sizing: border-box; }
+    .sh-prompt-textarea::placeholder { color: var(--lumiverse-text-dim); }
+    .sh-prompt-textarea:focus { outline: none; border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
     .sh-prompt-textarea-short { min-height: 80px; }
-    .sh-prompt-error { font-size: 12px; color: var(--lumiverse-danger, #e55); }
-    .sh-prompt-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
-    .sh-prompt-btn { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--lumiverse-border); background: var(--lumiverse-fill); color: var(--lumiverse-text); font-size: 13px; font-family: inherit; cursor: pointer; transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
-    .sh-prompt-btn:hover { border-color: var(--lumiverse-accent); background: var(--lumiverse-fill-subtle); }
-    .sh-prompt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .sh-prompt-btn-primary { background: var(--lumiverse-accent); color: var(--lumiverse-accent-fg); border-color: var(--lumiverse-accent); }
-    .sh-prompt-btn-primary:hover { opacity: 0.9; }
+
+    .sh-prompt-error { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-danger, #e55); }
+
+    /* Actions — matches InputPromptModal.module.css .actions / .btn* */
+    .sh-prompt-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+    .sh-prompt-btn { padding: 8px 18px; border-radius: var(--lcs-radius-sm, 8px); font-size: calc(12.5px * var(--lumiverse-font-scale, 1)); font-weight: 600; font-family: inherit; cursor: pointer; border: 1px solid var(--lumiverse-border); transition: all var(--lumiverse-transition-fast); }
+    .sh-prompt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Cancel — matches .btnCancel */
+    .sh-prompt-btn-cancel { background: transparent; color: var(--lumiverse-text-muted); }
+    .sh-prompt-btn-cancel:hover:not(:disabled) { background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04)); color: var(--lumiverse-text); }
+
+    /* Secondary (Re-run parser) — matches .btnSecondary / .btnSkip */
+    .sh-prompt-btn-secondary { background: var(--lumiverse-bg-dark); color: var(--lumiverse-text-dim); }
+    .sh-prompt-btn-secondary:hover:not(:disabled) { background: var(--lumiverse-bg-darker); color: var(--lumiverse-text); }
+
+    /* Primary (Generate) — matches .btnSubmit */
+    .sh-prompt-btn-primary { background: var(--lumiverse-primary-015, rgba(147,112,219,0.15)); color: var(--lumiverse-primary-text, #c4b5fd); border-color: var(--lumiverse-primary-020, rgba(147,112,219,0.2)); }
+    .sh-prompt-btn-primary:hover:not(:disabled) { background: var(--lumiverse-primary-025, rgba(147,112,219,0.25)); border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
   `)
 
-  // ── Settings panel ──
+  // ── Settings panel (mount-once pattern) ──
 
   const settingsRoot = ctx.ui.mount('settings_extensions')
-  settingsRoot.innerHTML = '<div class="sh-loading">Loading…</div>'
+  settingsRoot.innerHTML = '<div style="padding:16px;font-size:13px;color:var(--lumiverse-text-muted)">Loading…</div>'
 
-  function renderSettings() {
-    if (!settings) return
+  // Track mounted shared component handles
+  type SettingsHandles = {
+    showFloatWidget: any
+    toastOnInsert: any
+    forceGeneration: any
+    autoGenerateInterval: any
+    autoGenerateRandomMin: any
+    autoGenerateRandomMax: any
+    autoPreviewPrompt: any
+    autoSection: any
+  }
+  let handles: SettingsHandles | null = null
+  let settingsMounting = false
+
+  // Conditional rows that show/hide based on auto-generate mode
+  let rowInterval: HTMLElement | null = null
+  let rowRandom: HTMLElement | null = null
+  let rowAutoAfter: HTMLElement | null = null
+  let rowAutoPreview: HTMLElement | null = null
+
+  // Native select element refs for syncing
+  let selectWidgetSize: HTMLSelectElement | null = null
+  let selectWidgetStyle: HTMLSelectElement | null = null
+  let selectAfterGenerate: HTMLSelectElement | null = null
+  let selectAutoGenerate: HTMLSelectElement | null = null
+  let selectAutoGenerateAfter: HTMLSelectElement | null = null
+
+  function makeRow(labelText: string, descText: string): { row: HTMLElement; controlSlot: HTMLElement } {
+    const row = document.createElement('div')
+    row.className = 'sh-setting-row'
+
+    const info = document.createElement('div')
+    info.className = 'sh-setting-info'
+    const label = document.createElement('div')
+    label.className = 'sh-setting-label'
+    label.textContent = labelText
+    const desc = document.createElement('div')
+    desc.className = 'sh-setting-desc'
+    desc.textContent = descText
+    info.appendChild(label)
+    info.appendChild(desc)
+
+    const controlSlot = document.createElement('div')
+    controlSlot.className = 'sh-setting-control'
+
+    row.appendChild(info)
+    row.appendChild(controlSlot)
+    return { row, controlSlot }
+  }
+
+  function makeSelect(options: { value: string; label: string }[], current: string, onChange: (v: string) => void): HTMLSelectElement {
+    const select = document.createElement('select')
+    select.className = 'sh-select'
+    for (const opt of options) {
+      const el = document.createElement('option')
+      el.value = opt.value
+      el.textContent = opt.label
+      if (opt.value === current) el.selected = true
+      select.appendChild(el)
+    }
+    select.addEventListener('change', () => onChange(select.value))
+    return select
+  }
+
+  function mountSettings(s: Settings) {
     settingsRoot.innerHTML = ''
     const container = document.createElement('div')
     container.className = 'sh-settings'
 
-    const autoIsOff = settings.autoGenerate === 'off'
-    const showInterval = settings.autoGenerate === 'interval'
-    const showRandom = settings.autoGenerate === 'random'
+    // Settings title
+    const title = document.createElement('div')
+    title.className = 'sh-settings-title'
+    title.textContent = 'Shutter'
+    container.appendChild(title)
 
-    container.innerHTML = `
-      <div class="sh-heading">Shutter</div>
+    // ── General settings ──
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Floating Widget</div>
-          <div class="sh-setting-desc">Show a quick-access generate widget on screen</div>
-        </div>
-        <input type="checkbox" id="sh-toggle-float" ${settings.showFloatWidget ? 'checked' : ''} />
-      </div>
+    // Floating Widget toggle
+    const floatRow = makeRow('Floating Widget', 'Show a quick-access generate widget on screen')
+    container.appendChild(floatRow.row)
+    const showFloatWidget = ctx.components.mountSwitch(floatRow.controlSlot, {
+      checked: s.showFloatWidget,
+      onChange: (on: boolean) => updateSettings({ showFloatWidget: on }),
+    })
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Widget Size</div>
-          <div class="sh-setting-desc">Size of the floating button</div>
-        </div>
-        <select class="sh-select" id="sh-select-size">
-          <option value="small" ${settings.widgetSize === 'small' ? 'selected' : ''}>Small (44px)</option>
-          <option value="medium" ${settings.widgetSize === 'medium' ? 'selected' : ''}>Medium (56px)</option>
-          <option value="large" ${settings.widgetSize === 'large' ? 'selected' : ''}>Large (72px)</option>
-        </select>
-      </div>
+    // Widget Size — native <select>
+    const sizeRow = makeRow('Widget Size', 'Size of the floating button')
+    container.appendChild(sizeRow.row)
+    selectWidgetSize = makeSelect(
+      [{ value: 'small', label: 'Small (44px)' }, { value: 'medium', label: 'Medium (56px)' }, { value: 'large', label: 'Large (72px)' }],
+      s.widgetSize,
+      (v) => updateSettings({ widgetSize: v as Settings['widgetSize'] }),
+    )
+    sizeRow.controlSlot.appendChild(selectWidgetSize)
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Widget Style</div>
-          <div class="sh-setting-desc">Icon style for the floating button</div>
-        </div>
-        <select class="sh-select" id="sh-select-style">
-          <option value="color" ${settings.widgetStyle === 'color' ? 'selected' : ''}>Colour</option>
-          <option value="mono" ${settings.widgetStyle === 'mono' ? 'selected' : ''}>Monochrome</option>
-        </select>
-      </div>
+    // Widget Style — native <select>
+    const styleRow = makeRow('Widget Style', 'Icon style for the floating button')
+    container.appendChild(styleRow.row)
+    selectWidgetStyle = makeSelect(
+      [{ value: 'color', label: 'Colour' }, { value: 'mono', label: 'Monochrome' }],
+      s.widgetStyle,
+      (v) => updateSettings({ widgetStyle: v as Settings['widgetStyle'] }),
+    )
+    styleRow.controlSlot.appendChild(selectWidgetStyle)
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Toast on Insert</div>
-          <div class="sh-setting-desc">Show a notification when an image is inserted into a message</div>
-        </div>
-        <input type="checkbox" id="sh-toggle-toast" ${settings.toastOnInsert ? 'checked' : ''} />
-      </div>
+    // Toast on Insert
+    const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message')
+    container.appendChild(toastRow.row)
+    const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
+      checked: s.toastOnInsert,
+      onChange: (on: boolean) => updateSettings({ toastOnInsert: on }),
+    })
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Force Generation</div>
-          <div class="sh-setting-desc">Always request generation regardless of scene changes. When off, Lumiverse may skip generation if the scene hasn't changed enough.</div>
-        </div>
-        <input type="checkbox" id="sh-toggle-force" ${settings.forceGeneration ? 'checked' : ''} />
-      </div>
+    // Force Generation
+    const forceRow = makeRow('Force Generation', 'Always request generation regardless of scene changes. When off, Lumiverse may skip generation if the scene hasn\'t changed enough.')
+    container.appendChild(forceRow.row)
+    const forceGeneration = ctx.components.mountSwitch(forceRow.controlSlot, {
+      checked: s.forceGeneration,
+      onChange: (on: boolean) => updateSettings({ forceGeneration: on }),
+    })
 
-      <div class="sh-divider"></div>
+    // After Generate — native <select>
+    const afterRow = makeRow('After Generate', 'What to do after a manual generation. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    container.appendChild(afterRow.row)
+    selectAfterGenerate = makeSelect(
+      [{ value: 'ask_to_insert', label: 'Ask to insert' }, { value: 'auto_insert', label: 'Auto insert' }],
+      s.afterGenerate,
+      (v) => updateSettings({ afterGenerate: v as Settings['afterGenerate'] }),
+    )
+    afterRow.controlSlot.appendChild(selectAfterGenerate)
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">After Generate</div>
-          <div class="sh-setting-desc">What to do after a manual generation. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.</div>
-        </div>
-        <select class="sh-select" id="sh-select-after">
-          <option value="ask_to_insert" ${settings.afterGenerate === 'ask_to_insert' ? 'selected' : ''}>Ask to insert</option>
-          <option value="auto_insert" ${settings.afterGenerate === 'auto_insert' ? 'selected' : ''}>Auto insert</option>
-        </select>
-      </div>
+    // ── Auto Generate section (shared collapsible) ──
 
-      <div class="sh-divider"></div>
+    const autoSectionSlot = document.createElement('div')
+    autoSectionSlot.className = 'sh-auto-section'
+    container.appendChild(autoSectionSlot)
 
-      <div class="sh-heading">Auto Generate</div>
+    const autoSection = ctx.components.mountCollapsibleSection(autoSectionSlot, {
+      title: 'Auto Generate',
+      defaultExpanded: s.autoGenerate !== 'off',
+    })
 
-      <div class="sh-setting-row">
-        <div>
-          <div class="sh-setting-label">Mode</div>
-          <div class="sh-setting-desc">Automatically generate after AI responses. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.</div>
-        </div>
-        <select class="sh-select" id="sh-select-auto">
-          <option value="off" ${settings.autoGenerate === 'off' ? 'selected' : ''}>Off</option>
-          <option value="every" ${settings.autoGenerate === 'every' ? 'selected' : ''}>Every message</option>
-          <option value="interval" ${settings.autoGenerate === 'interval' ? 'selected' : ''}>Every X messages</option>
-          <option value="random" ${settings.autoGenerate === 'random' ? 'selected' : ''}>Random interval</option>
-        </select>
-      </div>
+    // Auto Generate Mode — native <select>
+    const autoModeRow = makeRow('Mode', 'Automatically generate after AI responses. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    autoSection.body.appendChild(autoModeRow.row)
+    selectAutoGenerate = makeSelect(
+      [{ value: 'off', label: 'Off' }, { value: 'every', label: 'Every message' }, { value: 'interval', label: 'Every X messages' }, { value: 'random', label: 'Random interval' }],
+      s.autoGenerate,
+      (v) => {
+        const mode = v as Settings['autoGenerate']
+        updateSettings({ autoGenerate: mode })
+        updateAutoRowVisibility(mode)
+      },
+    )
+    autoModeRow.controlSlot.appendChild(selectAutoGenerate)
 
-      <div class="sh-setting-row" id="sh-row-interval" style="display:${showInterval ? '' : 'none'}">
-        <div>
-          <div class="sh-setting-label">Interval</div>
-          <div class="sh-setting-desc">Generate every X AI messages</div>
-        </div>
-        <input type="number" class="sh-input-num" id="sh-input-interval" min="1" max="99" value="${settings.autoGenerateInterval}" />
-      </div>
+    // Interval row — shared number stepper
+    const intervalRow = makeRow('Interval', 'Generate every X AI messages')
+    autoSection.body.appendChild(intervalRow.row)
+    rowInterval = intervalRow.row
+    const autoGenerateInterval = ctx.components.mountNumberStepper(intervalRow.controlSlot, {
+      value: s.autoGenerateInterval,
+      min: 1,
+      max: 99,
+      step: 1,
+      onChange: (v: number | null) => { if (v !== null) updateSettings({ autoGenerateInterval: v }) },
+    })
 
-      <div class="sh-setting-row" id="sh-row-random" style="display:${showRandom ? '' : 'none'}">
-        <div>
-          <div class="sh-setting-label">Random Range</div>
-          <div class="sh-setting-desc">Generate randomly between X and Y AI messages</div>
-        </div>
-        <div class="sh-range-row">
-          <input type="number" class="sh-input-num" id="sh-input-rand-min" min="1" max="99" value="${settings.autoGenerateRandomMin}" />
-          <span class="sh-range-label">to</span>
-          <input type="number" class="sh-input-num" id="sh-input-rand-max" min="1" max="99" value="${settings.autoGenerateRandomMax}" />
-        </div>
-      </div>
+    // Random range row — shared number steppers
+    const randomRow = makeRow('Random Range', 'Generate randomly between X and Y AI messages')
+    autoSection.body.appendChild(randomRow.row)
+    rowRandom = randomRow.row
+    const rangeContainer = document.createElement('div')
+    rangeContainer.className = 'sh-range-row'
+    const minSlot = document.createElement('div')
+    const rangeSep = document.createElement('span')
+    rangeSep.className = 'sh-range-label'
+    rangeSep.textContent = 'to'
+    const maxSlot = document.createElement('div')
+    rangeContainer.appendChild(minSlot)
+    rangeContainer.appendChild(rangeSep)
+    rangeContainer.appendChild(maxSlot)
+    randomRow.controlSlot.appendChild(rangeContainer)
 
-      <div class="sh-setting-row" id="sh-row-auto-after" style="display:${autoIsOff ? 'none' : ''}">
-        <div>
-          <div class="sh-setting-label">After Auto Generate</div>
-          <div class="sh-setting-desc">What to do after an automatic generation</div>
-        </div>
-        <select class="sh-select" id="sh-select-auto-after">
-          <option value="auto_insert" ${settings.autoGenerateAfter === 'auto_insert' ? 'selected' : ''}>Auto insert</option>
-          <option value="ask_to_insert" ${settings.autoGenerateAfter === 'ask_to_insert' ? 'selected' : ''}>Ask to insert</option>
-        </select>
-      </div>
+    const autoGenerateRandomMin = ctx.components.mountNumberStepper(minSlot, {
+      value: s.autoGenerateRandomMin,
+      min: 1, max: 99, step: 1,
+      onChange: (v: number | null) => { if (v !== null) updateSettings({ autoGenerateRandomMin: v }) },
+    })
+    const autoGenerateRandomMax = ctx.components.mountNumberStepper(maxSlot, {
+      value: s.autoGenerateRandomMax,
+      min: 1, max: 99, step: 1,
+      onChange: (v: number | null) => { if (v !== null) updateSettings({ autoGenerateRandomMax: v }) },
+    })
 
-      <div class="sh-setting-row" id="sh-row-auto-preview" style="display:${autoIsOff ? 'none' : ''}">
-        <div>
-          <div class="sh-setting-label">Preview Prompt on Auto</div>
-          <div class="sh-setting-desc">Show the prompt preview before auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.</div>
-        </div>
-        <input type="checkbox" id="sh-toggle-auto-preview" ${settings.autoPreviewPrompt ? 'checked' : ''} />
-      </div>
-    `
+    // After Auto Generate — native <select>
+    const autoAfterRow = makeRow('After Auto Generate', 'What to do after an automatic generation')
+    autoSection.body.appendChild(autoAfterRow.row)
+    rowAutoAfter = autoAfterRow.row
+    selectAutoGenerateAfter = makeSelect(
+      [{ value: 'auto_insert', label: 'Auto insert' }, { value: 'ask_to_insert', label: 'Ask to insert' }],
+      s.autoGenerateAfter,
+      (v) => updateSettings({ autoGenerateAfter: v as Settings['autoGenerateAfter'] }),
+    )
+    autoAfterRow.controlSlot.appendChild(selectAutoGenerateAfter)
+
+    // Preview Prompt on Auto — shared switch
+    const autoPreviewRow = makeRow('Preview Prompt on Auto', 'Show the prompt preview before auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.')
+    autoSection.body.appendChild(autoPreviewRow.row)
+    rowAutoPreview = autoPreviewRow.row
+    const autoPreviewPrompt = ctx.components.mountSwitch(autoPreviewRow.controlSlot, {
+      checked: s.autoPreviewPrompt,
+      onChange: (on: boolean) => updateSettings({ autoPreviewPrompt: on }),
+    })
 
     settingsRoot.appendChild(container)
 
-    // ── Event listeners ──
+    // Set initial visibility of conditional rows
+    updateAutoRowVisibility(s.autoGenerate)
 
-    container.querySelector('#sh-toggle-float')?.addEventListener('change', (e) => {
-      updateSettings({ showFloatWidget: (e.target as HTMLInputElement).checked })
-    })
-    container.querySelector('#sh-select-size')?.addEventListener('change', (e) => {
-      updateSettings({ widgetSize: (e.target as HTMLSelectElement).value as Settings['widgetSize'] })
-    })
-    container.querySelector('#sh-select-style')?.addEventListener('change', (e) => {
-      updateSettings({ widgetStyle: (e.target as HTMLSelectElement).value as Settings['widgetStyle'] })
-    })
-    container.querySelector('#sh-toggle-toast')?.addEventListener('change', (e) => {
-      updateSettings({ toastOnInsert: (e.target as HTMLInputElement).checked })
-    })
-    container.querySelector('#sh-toggle-force')?.addEventListener('change', (e) => {
-      updateSettings({ forceGeneration: (e.target as HTMLInputElement).checked })
-    })
-    container.querySelector('#sh-select-after')?.addEventListener('change', (e) => {
-      updateSettings({ afterGenerate: (e.target as HTMLSelectElement).value as Settings['afterGenerate'] })
-    })
-    container.querySelector('#sh-select-auto')?.addEventListener('change', (e) => {
-      const mode = (e.target as HTMLSelectElement).value as Settings['autoGenerate']
-      updateSettings({ autoGenerate: mode })
+    handles = {
+      showFloatWidget,
+      toastOnInsert,
+      forceGeneration,
+      autoGenerateInterval,
+      autoGenerateRandomMin,
+      autoGenerateRandomMax,
+      autoPreviewPrompt,
+      autoSection,
+    }
+  }
 
-      // Update conditional row visibility in-place. The optimistic update means
-      // the backend echo won't trigger renderSettings (values already match), so
-      // this is the only code path that shows/hides these rows immediately.
-      const rowInterval = container.querySelector('#sh-row-interval') as HTMLElement | null
-      const rowRandom = container.querySelector('#sh-row-random') as HTMLElement | null
-      const rowAutoAfter = container.querySelector('#sh-row-auto-after') as HTMLElement | null
-      const rowAutoPreview = container.querySelector('#sh-row-auto-preview') as HTMLElement | null
-      if (rowInterval) rowInterval.style.display = mode === 'interval' ? '' : 'none'
-      if (rowRandom) rowRandom.style.display = mode === 'random' ? '' : 'none'
-      if (rowAutoAfter) rowAutoAfter.style.display = mode === 'off' ? 'none' : ''
-      if (rowAutoPreview) rowAutoPreview.style.display = mode === 'off' ? 'none' : ''
-    })
-    container.querySelector('#sh-input-interval')?.addEventListener('change', (e) => {
-      const val = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 3)
-      updateSettings({ autoGenerateInterval: val })
-    })
-    container.querySelector('#sh-input-rand-min')?.addEventListener('change', (e) => {
-      const val = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 3)
-      updateSettings({ autoGenerateRandomMin: val })
-    })
-    container.querySelector('#sh-input-rand-max')?.addEventListener('change', (e) => {
-      const val = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 7)
-      updateSettings({ autoGenerateRandomMax: val })
-    })
-    container.querySelector('#sh-select-auto-after')?.addEventListener('change', (e) => {
-      updateSettings({ autoGenerateAfter: (e.target as HTMLSelectElement).value as Settings['autoGenerateAfter'] })
-    })
-    container.querySelector('#sh-toggle-auto-preview')?.addEventListener('change', (e) => {
-      updateSettings({ autoPreviewPrompt: (e.target as HTMLInputElement).checked })
-    })
+  function updateAutoRowVisibility(mode: Settings['autoGenerate']) {
+    const showInterval = mode === 'interval'
+    const showRandom = mode === 'random'
+    const autoActive = mode !== 'off'
+
+    if (rowInterval) rowInterval.style.display = showInterval ? '' : 'none'
+    if (rowRandom) rowRandom.style.display = showRandom ? '' : 'none'
+    if (rowAutoAfter) rowAutoAfter.style.display = autoActive ? '' : 'none'
+    if (rowAutoPreview) rowAutoPreview.style.display = autoActive ? '' : 'none'
+  }
+
+  function destroySettingsHandles() {
+    if (!handles) return
+    handles.showFloatWidget.destroy()
+    handles.toastOnInsert.destroy()
+    handles.forceGeneration.destroy()
+    handles.autoGenerateInterval.destroy()
+    handles.autoGenerateRandomMin.destroy()
+    handles.autoGenerateRandomMax.destroy()
+    handles.autoPreviewPrompt.destroy()
+    handles.autoSection.destroy()
+    handles = null
+    rowInterval = null
+    rowRandom = null
+    rowAutoAfter = null
+    rowAutoPreview = null
+    selectWidgetSize = null
+    selectWidgetStyle = null
+    selectAfterGenerate = null
+    selectAutoGenerate = null
+    selectAutoGenerateAfter = null
+  }
+
+  function syncSettingsToHandles(s: Settings) {
+    if (!handles) return
+
+    // Shared components — use update()
+    handles.showFloatWidget.update({ checked: s.showFloatWidget })
+    handles.toastOnInsert.update({ checked: s.toastOnInsert })
+    handles.forceGeneration.update({ checked: s.forceGeneration })
+    handles.autoGenerateInterval.update({ value: s.autoGenerateInterval })
+    handles.autoGenerateRandomMin.update({ value: s.autoGenerateRandomMin })
+    handles.autoGenerateRandomMax.update({ value: s.autoGenerateRandomMax })
+    handles.autoPreviewPrompt.update({ checked: s.autoPreviewPrompt })
+
+    // Native selects — set .value directly
+    if (selectWidgetSize) selectWidgetSize.value = s.widgetSize
+    if (selectWidgetStyle) selectWidgetStyle.value = s.widgetStyle
+    if (selectAfterGenerate) selectAfterGenerate.value = s.afterGenerate
+    if (selectAutoGenerate) selectAutoGenerate.value = s.autoGenerate
+    if (selectAutoGenerateAfter) selectAutoGenerateAfter.value = s.autoGenerateAfter
+
+    updateAutoRowVisibility(s.autoGenerate)
   }
 
   // ── Native ImageGen ──
@@ -393,36 +533,36 @@ export function setup(ctx: SpindleFrontendContext) {
   let nativeSettingsFetchedAt = 0
 
   async function fetchNativeSettings(): Promise<Record<string, any>> {
-    const now = Date.now()
-    if (cachedNativeSettings !== null && (now - nativeSettingsFetchedAt) < NATIVE_SETTINGS_CACHE_MS) {
-      return cachedNativeSettings
-    }
     try {
       const resp = await fetch('/api/v1/settings/imageGeneration')
-      if (resp.ok) {
-        const data = await resp.json()
-        const s = data?.value
-        if (s && typeof s === 'object') {
-          cachedNativeSettings = s
-          nativeSettingsFetchedAt = now
-          return s
-        }
-      }
-    } catch { /* fall through */ }
-    return cachedNativeSettings ?? {}
+      if (!resp.ok) throw new Error(await resp.text())
+
+      const data = await resp.json()
+      const s = data?.value
+      if (!s || typeof s !== 'object') throw new Error('Native ImageGen settings were not returned.')
+
+      cachedNativeSettings = s
+      nativeSettingsFetchedAt = Date.now()
+      return s
+    } catch (err: any) {
+      if (cachedNativeSettings !== null) return cachedNativeSettings
+      const details = err?.message ? ` ${parseErrorMessage(err.message)}` : ''
+      throw new Error(`Native ImageGen settings could not be loaded. Make sure Lumiverse ImageGen is available and configured.${details}`)
+    }
   }
 
   async function resolveLastMessageId(chatId: string): Promise<string | undefined> {
-    try {
-      const resp = await fetch(`/api/v1/chats/${chatId}/messages?tail=true&limit=1`)
-      if (resp.ok) {
-        const result = await resp.json()
-        const messages = result?.data || result
-        const last = Array.isArray(messages) ? messages[messages.length - 1] : null
-        if (last?.id) return last.id
-      }
-    } catch { /* fall through */ }
-    return undefined
+    const requestId = `last-message-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingLastMessageRequests.delete(requestId)
+        resolve(undefined)
+      }, 5000)
+
+      pendingLastMessageRequests.set(requestId, { resolve, timeout })
+      ctx.sendToBackend({ type: 'resolve_last_message_id', requestId, chatId })
+    })
   }
 
   async function callImageGen(chatId: string, overrides?: Record<string, any>): Promise<GenerationResult> {
@@ -501,7 +641,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Generate ──
 
   async function triggerGenerate(messageId?: string, chatId?: string, isAuto = false) {
-    if (generating) return
+    if (generating || promptPreviewOpen) return
 
     if (!chatId) {
       const active = ctx.getActiveChat()
@@ -516,25 +656,27 @@ export function setup(ctx: SpindleFrontendContext) {
       const outputTarget = native.outputTarget || 'background'
 
       if (isAuto) {
+        // Shutter's automation only owns inline/manual insertion. If native
+        // ImageGen is configured to insert into chat or attach to the last
+        // message, let the native path handle that mode instead. Do not skip
+        // merely because native Auto-Generate is enabled: many users leave
+        // that setting on while using Shutter for inline/background automation.
         if (outputTarget === 'chat_attachment' || outputTarget === 'attach_to_message') {
           setGeneratingState(false)
           return
         }
       }
 
-      // Prompt preview flow — mirrors native ImageGen panel behavior.
-      // Manual generates always check the native toggle; auto-generates only
-      // show the preview when the user has opted in via "Preview Prompt on Auto".
       const showPreview = native.previewPromptBeforeGenerate
         && (!isAuto || settings?.autoPreviewPrompt)
       if (showPreview) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId)
+          openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId, isAuto)
         } catch (err: any) {
           setGeneratingState(false)
-          showErrorModal(parseErrorMessage(err.message))
+          if (!isAuto) showErrorModal(parseErrorMessage(err.message))
         }
         return
       }
@@ -558,37 +700,12 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  // ── Chat visibility: event-driven route detection ──
+  // ── Chat visibility: CHAT_SWITCHED event ──
 
-  let lastFloatVisible: boolean | null = null
-
-  function applyFloatVisibility() {
+  const unsubChatSwitched = ctx.events.on('CHAT_SWITCHED', (event: any) => {
     if (!floatWidget) return
-    const visible = isInChatView()
-    if (visible !== lastFloatVisible) {
-      lastFloatVisible = visible
-      floatWidget.setVisible(visible)
-    }
-  }
-
-  const originalPushState = window.history.pushState.bind(window.history)
-  const originalReplaceState = window.history.replaceState.bind(window.history)
-
-  window.history.pushState = function (...args: any[]) {
-    const result = originalPushState(...args)
-    applyFloatVisibility()
-    return result
-  }
-
-  window.history.replaceState = function (...args: any[]) {
-    const result = originalReplaceState(...args)
-    applyFloatVisibility()
-    return result
-  }
-
-  const onRouteChange = () => applyFloatVisibility()
-  window.addEventListener('popstate', onRouteChange)
-  window.addEventListener('hashchange', onRouteChange)
+    floatWidget.setVisible(event.chatId !== null)
+  })
 
   // ── Float widget ──
 
@@ -629,12 +746,13 @@ export function setup(ctx: SpindleFrontendContext) {
     })
 
     floatWidget.root.appendChild(btn)
-    applyFloatVisibility()
+
+    const active = ctx.getActiveChat()
+    floatWidget.setVisible(!!active.chatId)
   }
 
   function destroyFloatWidget() {
     if (!floatWidget) return
-    lastFloatVisible = null
     floatWidget.destroy()
     floatWidget = null
   }
@@ -678,13 +796,43 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Modals ──
 
+  // ── Lightbox state (for cleanup) ──
+
+  let activeLightbox: { overlay: HTMLElement; escHandler: (e: KeyboardEvent) => void } | null = null
+
+  function dismissLightbox() {
+    if (!activeLightbox) return
+    document.removeEventListener('keydown', activeLightbox.escHandler)
+    activeLightbox.overlay.remove()
+    activeLightbox = null
+  }
+
   function openLightbox(src: string) {
+    // Dismiss any existing lightbox first
+    dismissLightbox()
+
     const overlay = document.createElement('div')
     overlay.className = 'sh-lightbox'
     const img = document.createElement('img')
     img.src = src
     overlay.appendChild(img)
-    overlay.addEventListener('click', () => overlay.remove())
+
+    // Mousedown-origin guard — matches native ImageLightbox behavior.
+    // Only close if both mousedown and click land on the backdrop itself.
+    let mouseDownTarget: EventTarget | null = null
+    overlay.addEventListener('mousedown', (e) => {
+      mouseDownTarget = e.target
+    })
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay && mouseDownTarget === overlay) dismissLightbox()
+    })
+
+    const escHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismissLightbox()
+    }
+    document.addEventListener('keydown', escHandler)
+
+    activeLightbox = { overlay, escHandler }
     document.body.appendChild(overlay)
   }
 
@@ -701,11 +849,13 @@ export function setup(ctx: SpindleFrontendContext) {
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 
+    const previewWrap = document.createElement('div')
+    previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
-    preview.className = 'sh-preview-img'
     preview.src = imageUrl
     preview.addEventListener('click', () => openLightbox(imageUrl))
-    container.appendChild(preview)
+    previewWrap.appendChild(preview)
+    container.appendChild(previewWrap)
 
     const choices = document.createElement('div')
     choices.className = 'sh-dest-choices'
@@ -721,32 +871,32 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function showErrorModal(message: string) {
-    const modal = ctx.ui.showModal({ title: 'Generation Failed', width: 380 })
-    const container = document.createElement('div')
-    container.className = 'sh-modal-body'
-    const msg = document.createElement('div')
-    msg.style.cssText = 'font-size:13px;color:var(--lumiverse-text);line-height:1.5;text-align:center;padding:4px 0;'
-    msg.textContent = message
-    container.appendChild(msg)
-    const btn = document.createElement('button')
-    btn.className = 'sh-dest-btn'
-    btn.style.cssText = 'justify-content:center;margin-top:4px;'
-    btn.innerHTML = '<div class="sh-dest-label">OK</div>'
-    btn.addEventListener('click', () => modal.dismiss())
-    container.appendChild(btn)
-    modal.root.appendChild(container)
+    ctx.ui.showConfirm({
+      title: 'Generation Failed',
+      message,
+      variant: 'danger',
+      confirmLabel: 'OK',
+      cancelLabel: 'Dismiss',
+    })
   }
 
-  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, chatId: string, messageId?: string) {
+  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, chatId: string, messageId?: string, isAuto = false) {
+    if (promptPreviewOpen) return
+    promptPreviewOpen = true
     const modal = ctx.ui.showModal({ title: 'Preview & Edit Image Prompt', width: 640, persistent: true })
+    function closePromptModal() {
+      promptPreviewOpen = false
+      modal.dismiss()
+    }
     const container = document.createElement('div')
-    container.className = 'sh-modal-body'
+    container.className = 'sh-prompt-body'
 
     const subtitle = document.createElement('div')
     subtitle.className = 'sh-prompt-subtitle'
     subtitle.textContent = 'This is the prompt that will be sent to the image generator. Edit it freely \u2014 the parser will be skipped on confirm.'
     container.appendChild(subtitle)
 
+    // Prompt field — native textarea matching InputPromptModal
     const promptField = document.createElement('div')
     promptField.className = 'sh-prompt-field'
     const promptLabel = document.createElement('label')
@@ -760,6 +910,7 @@ export function setup(ctx: SpindleFrontendContext) {
     promptField.appendChild(promptTextarea)
     container.appendChild(promptField)
 
+    // Negative prompt field
     const negField = document.createElement('div')
     negField.className = 'sh-prompt-field'
     const negLabel = document.createElement('label')
@@ -782,12 +933,12 @@ export function setup(ctx: SpindleFrontendContext) {
     actions.className = 'sh-prompt-actions'
 
     const cancelBtn = document.createElement('button')
-    cancelBtn.className = 'sh-prompt-btn'
+    cancelBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
     cancelBtn.textContent = 'Cancel'
-    cancelBtn.addEventListener('click', () => modal.dismiss())
+    cancelBtn.addEventListener('click', () => closePromptModal())
 
     const rerunBtn = document.createElement('button')
-    rerunBtn.className = 'sh-prompt-btn'
+    rerunBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     rerunBtn.textContent = 'Re-run parser'
 
     const generateBtn = document.createElement('button')
@@ -798,6 +949,8 @@ export function setup(ctx: SpindleFrontendContext) {
       rerunBtn.disabled = busy
       generateBtn.disabled = busy
       cancelBtn.disabled = busy
+      promptTextarea.disabled = busy
+      negTextarea.disabled = busy
       rerunBtn.textContent = busy ? 'Regenerating\u2026' : 'Re-run parser'
     }
 
@@ -823,7 +976,7 @@ export function setup(ctx: SpindleFrontendContext) {
         errorEl.style.display = ''
         return
       }
-      modal.dismiss()
+      closePromptModal()
 
       setGeneratingState(true)
       try {
@@ -832,7 +985,7 @@ export function setup(ctx: SpindleFrontendContext) {
           negativePrompt: negTextarea.value,
           skipParse: true,
         })
-        handleGenerationResult(result, messageId || '__last__', chatId, false)
+        handleGenerationResult(result, messageId || '__last__', chatId, isAuto)
       } catch (err: any) {
         setGeneratingState(false)
         showErrorModal(parseErrorMessage(err.message))
@@ -849,6 +1002,15 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Backend messages ──
 
   const unsubBackend = ctx.onBackendMessage((payload: any) => {
+    if (payload.type === 'last_message_id') {
+      const pending = pendingLastMessageRequests.get(payload.requestId)
+      if (!pending) return
+      clearTimeout(pending.timeout)
+      pendingLastMessageRequests.delete(payload.requestId)
+      pending.resolve(typeof payload.messageId === 'string' ? payload.messageId : undefined)
+      return
+    }
+
     if (payload.type !== 'settings') return
 
     const incoming: Settings = payload.settings
@@ -860,7 +1022,15 @@ export function setup(ctx: SpindleFrontendContext) {
     if (changed) {
       const prev = settings ? { ...settings } : null
       applySettingsChange(prev, incoming)
-      renderSettings()
+
+      if (!handles) {
+        if (settingsMounting) return
+        settingsMounting = true
+        mountSettings(incoming)
+        settingsMounting = false
+      } else {
+        syncSettingsToHandles(incoming)
+      }
     }
   })
 
@@ -871,16 +1041,19 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Cleanup ──
 
   return () => {
+    for (const [requestId, pending] of pendingLastMessageRequests) {
+      clearTimeout(pending.timeout)
+      pending.resolve(undefined)
+      pendingLastMessageRequests.delete(requestId)
+    }
     unsubBackend()
     unsubCharMsg()
+    unsubChatSwitched()
     inputAction.destroy()
     destroyFloatWidget()
+    destroySettingsHandles()
+    dismissLightbox()
     removeStyle()
-
-    window.history.pushState = originalPushState
-    window.history.replaceState = originalReplaceState
-    window.removeEventListener('popstate', onRouteChange)
-    window.removeEventListener('hashchange', onRouteChange)
 
     ctx.dom.cleanup()
   }

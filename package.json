@@ -1,9 +1,13 @@
 {
   "name": "shutter",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts --outdir dist --target browser"
+    "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts --outdir dist --target browser",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "lumiverse-spindle-types": "0.5.7"
   }
 }

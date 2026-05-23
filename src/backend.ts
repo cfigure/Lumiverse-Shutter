@@ -21,6 +21,7 @@ type FrontendMessage =
   | { type: 'request_settings' }
   | { type: 'update_settings'; settings: Partial<Settings> }
   | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string }
+  | { type: 'resolve_last_message_id'; requestId: string; chatId: string }
 
 const DEFAULT_SETTINGS: Settings = {
   showFloatWidget: false,
@@ -50,7 +51,7 @@ function validateSettings(s: Settings): Settings {
 // ── Storage ──
 
 async function loadSettings(userId?: string): Promise<Settings> {
-  const saved = await spindle.userStorage.getJson<Partial<Settings>>('settings.json', { fallback: {}, userId })
+  const saved = await spindle.userStorage.getJson('settings.json', { fallback: {}, userId }) as Partial<Settings>
   return { ...DEFAULT_SETTINGS, ...saved }
 }
 
@@ -63,7 +64,7 @@ async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<
 
 // ── Frontend messages ──
 
-spindle.onFrontendMessage(async (payload: FrontendMessage, userId) => {
+spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
   try {
     switch (payload.type) {
 
@@ -79,13 +80,54 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId) => {
         break
       }
 
+
+      case 'resolve_last_message_id': {
+        if (!spindle.permissions.has('chat_mutation')) {
+          spindle.sendToFrontend({
+            type: 'last_message_id',
+            requestId: payload.requestId,
+            messageId: null,
+            error: 'Grant the "Chat Mutation" permission to resolve chat messages.',
+          }, userId)
+          return
+        }
+
+        const messages = await spindle.chat.getMessages(payload.chatId) as Array<{
+          id?: string
+          createdAt?: string
+          created_at?: string
+          timestamp?: string
+        }>
+
+        const valid = Array.isArray(messages) ? messages.filter(m => typeof m?.id === 'string') : []
+        const sortable = valid.every(m => {
+          const raw = m.createdAt || m.created_at || m.timestamp
+          return typeof raw === 'string' && !Number.isNaN(Date.parse(raw))
+        })
+        const ordered = sortable
+          ? [...valid].sort((a, b) => {
+              const at = Date.parse(a.createdAt || a.created_at || a.timestamp || '')
+              const bt = Date.parse(b.createdAt || b.created_at || b.timestamp || '')
+              return at - bt
+            })
+          : valid
+        const last = ordered[ordered.length - 1]
+
+        spindle.sendToFrontend({
+          type: 'last_message_id',
+          requestId: payload.requestId,
+          messageId: last?.id ?? null,
+        }, userId)
+        break
+      }
+
       case 'insert_into_message': {
         if (!spindle.permissions.has('chat_mutation')) {
           spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.')
           return
         }
 
-        const messages = await spindle.chat.getMessages(payload.chatId)
+        const messages = await spindle.chat.getMessages(payload.chatId) as Array<{ id: string; content: string }>
 
         let targetId = payload.messageId
         if (targetId === '__last__') {
@@ -98,6 +140,11 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId) => {
         if (!target) { spindle.toast.error('Message not found.'); return }
 
         const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
+        if (target.content.includes(imageUrl)) {
+          spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
+          return
+        }
+
         await spindle.chat.updateMessage(payload.chatId, targetId, {
           content: target.content + `\n\n![shutter](${imageUrl})`,
         })

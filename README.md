@@ -1,21 +1,21 @@
 # Shutter
 
-A [Lumiverse](https://github.com/prolix-oc/Lumiverse) extension that provides quick-access image generation for ImageGen with configurable insert behaviour.
+A [Lumiverse](https://github.com/prolix-oc/Lumiverse) extension that provides a quick-access widget and automation layer for native ImageGen with configurable inline insertion behaviour.
 
 ## Summary
 
-Shutter adds a floating button and an input bar action that let you trigger image generation with a single click. When you press either button, Shutter calls Lumiverse's ImageGen API for the active chat. 
+Shutter adds a floating widget and an input bar action that let you trigger Lumiverse's native ImageGen with a single click. It calls Lumiverse's native ImageGen routes and uses the user's existing native ImageGen settings. 
 
 What happens after generation depends on how ImageGen is configured:
 
-- **Preview only and Set as background** - Messages are added to the last message in the chat. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same, my recommendation would be to leave it on 'Preview only', but both work. 
-- **Insert into chat / Attach to Last Message** — ImageGen handles image placement natively, so Shutter has nothing more to do. Auto-generate is skipped in these modes.
+- **Preview only and Set as background** — Images are appended to the last message in the chat. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same. For Shutter workflows, **Preview only** is recommended.
+- **Insert into chat / Attach to last message** — ImageGen handles image placement natively, so Shutter has nothing more to do. Shutter auto-generate is skipped in these modes.
 
 Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
 
 ### Auto Generate
 
-Shutter can automatically trigger image generation after AI responses. Auto-generate is skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" mode.
+Shutter can automatically trigger native ImageGen after AI responses. Auto-generate is skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" mode, because native ImageGen already handles placement in those modes. Shutter's automation is intended for inline/background-style workflows where Shutter may need to append the generated image markdown itself.
 
 There are three auto-generate modes:
 
@@ -31,10 +31,10 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Widget Size** — size of the floating button (Small 44px / Medium 56px / Large 72px)
 - **Widget Style** — icon style for the floating button (Colour / Monochrome)
 - **Toast on Insert** — show a notification when an image is inserted into a message
-- **Force Generation** — always generate regardless of scene changes, the same as Force Generate in the native ImageGen panel. When off, generation respects the scene change threshold. This is unlikely to be needed, but I have included it as v1.0.0 always went through as force generation, but practically it likely makes no difference. 
+- **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
 - **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
 
-When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter will show a prompt preview modal before manual generations. You can review and edit the prompt, re-run the parser, or generate directly.
+When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter shows its own prompt preview modal before manual generations. This mirrors the native preview flow because extensions cannot mount the native React prompt-preview component directly. You can review and edit the resolved prompt, re-run the parser, or generate directly.
 
 ### Auto Generate Settings
 
@@ -45,7 +45,6 @@ When "Preview Prompt Before Generating" is enabled in native ImageGen settings, 
 - **Preview Prompt on Auto** — show the prompt preview modal for auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings and **Preview Prompt on Auto** is turned on, Shutter will also show the prompt preview modal for auto-generated images.
-
 
 ## CSS Snippet
 Tiny little CSS snippet for centring images inserted into messages if you prefer that to the default left align. 
@@ -60,16 +59,19 @@ If you're using Minimal chat layout, replace `BubbleMessage` with `MinimalMessag
 
 ## Compatibility
 
-Shutter requires Lumiverse on the `staging` branch at commit [`3a241c8`](https://github.com/prolix-oc/Lumiverse/commit/3a241c89caa22ba55d16ba7fc7c926d7ee7a9965) or later.
+Shutter requires Lumiverse 1.0.0 or newer.
+
+### Compatibility notes
+
+**Force Generation** exposes Lumiverse’s native ImageGen force-generate behaviour; Shutter does not implement its own scene-change logic. The setting is included because Shutter v1.0.0 always triggered native ImageGen with force generation enabled. Most users can leave it off.
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
-| `chats` | Resolve the active chat for generation |
-| `chat_mutation` | Append image markdown to message content |
-| `ui_panels` | Optional floating widget button |
-| `generation` | Trigger ImageGen for the active chat |
+| `chat_mutation` | Append native ImageGen output markdown to the original assistant message when inline insertion is needed. |
+| `ui_panels` | Render Shutter's settings UI and quick-access controls. |
+| `generation` | Listen for Lumiverse generation lifecycle events so Shutter can optionally trigger native ImageGen after assistant replies. |
 
 ## Installation
 

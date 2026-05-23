@@ -78,7 +78,7 @@ Shutter requires Lumiverse 1.0.0 or newer.
 Install from URL in **Settings → Extensions**:
 
 ```
-https://github.com/cfigure/Lumiverse-shutter
+https://github.com/cfigure/Lumiverse-Shutter
 ```
 
 Permissions are requested automatically on first load.

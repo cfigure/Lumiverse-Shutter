@@ -31,7 +31,7 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Widget Size** — size of the floating button (Small 44px / Medium 56px / Large 72px)
 - **Widget Style** — icon style for the floating button (Colour / Monochrome)
 - **Toast on Insert** — show a notification when an image is inserted into a message
-- **Force Generation** — always generate regardless of scene changes, the same as Force Generate in the native ImageGen panel. When off, generation respects the scene change threshold. This is unlikely to be needed, but I have included it as Shutter v1.0.0 always went through as force generation, but practically it likely makes no difference. 
+- **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
 - **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter shows its own prompt preview modal before manual generations. This mirrors the native preview flow because extensions cannot mount the native React prompt-preview component directly. You can review and edit the resolved prompt, re-run the parser, or generate directly.
@@ -60,6 +60,10 @@ If you're using Minimal chat layout, replace `BubbleMessage` with `MinimalMessag
 ## Compatibility
 
 Shutter requires Lumiverse 1.0.0 or newer.
+
+### Compatibility notes
+
+**Force Generation** exposes Lumiverse’s native ImageGen force-generate behaviour; Shutter does not implement its own scene-change logic. The setting is included because Shutter v1.0.0 always triggered native ImageGen with force generation enabled. Most users can leave it off.
 
 ## Permissions
 

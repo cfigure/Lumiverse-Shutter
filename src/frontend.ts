@@ -22,6 +22,8 @@ type GenerationResult = {
   imageId: string
   imageUrl: string
   handledByNative: boolean
+  prompt: string
+  negativePrompt: string
 }
 
 // ── Constants ──
@@ -185,18 +187,19 @@ export function setup(ctx: SpindleFrontendContext) {
     .sh-input-num:focus { border-color: var(--lumiverse-primary); }
 
     /* ── Destination modal ── */
-    .sh-modal-body { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
+    .sh-modal-body { padding: 8px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
-    .sh-preview img { display: block; width: 100%; max-height: 200px; object-fit: contain; }
+    .sh-preview img { display: block; width: 100%; max-height: min(34vh, 280px); object-fit: contain; }
 
     /* Action buttons — matches FormComponents.module.css .btn */
-    .sh-dest-choices { display: flex; flex-direction: column; gap: 8px; }
-    .sh-dest-btn { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); cursor: pointer; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; font-family: inherit; text-align: left; transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
+    .sh-dest-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .sh-dest-btn { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 7px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); cursor: pointer; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; font-family: inherit; text-align: left; transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
     .sh-dest-btn:hover { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
     .sh-dest-label { font-weight: 500; color: var(--lumiverse-text); }
-    .sh-dest-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin-top: 2px; }
+    .sh-dest-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin-top: 1px; line-height: 1.25; }
+    @media (max-width: 560px) { .sh-dest-choices { grid-template-columns: 1fr; } }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }
@@ -205,7 +208,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     /* ── Prompt preview modal — matches InputPromptModal.module.css ── */
     .sh-prompt-subtitle { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin: 0; padding: 0; line-height: 1.5; }
-    .sh-prompt-body { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 14px; }
+    .sh-prompt-body { padding: 8px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
     .sh-prompt-field { display: flex; flex-direction: column; gap: 4px; }
     .sh-prompt-label { font-size: calc(11px * var(--lumiverse-font-scale, 1)); font-weight: 600; color: var(--lumiverse-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
@@ -592,6 +595,8 @@ export function setup(ctx: SpindleFrontendContext) {
       imageId: result.imageId,
       imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
       handledByNative: !!result.message,
+      prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
+      negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
     }
   }
 
@@ -634,7 +639,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (afterAction === 'auto_insert') {
       ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId })
     } else {
-      openDestinationModal(result.imageId, result.imageUrl, messageId, chatId)
+      openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto)
     }
   }
 
@@ -844,8 +849,8 @@ export function setup(ctx: SpindleFrontendContext) {
     return btn
   }
 
-  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string) {
-    const modal = ctx.ui.showModal({ title: 'Image Generated', width: 400, persistent: true })
+  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean) {
+    const modal = ctx.ui.showModal({ title: 'Image Generated', width: 560, persistent: true })
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 
@@ -859,11 +864,37 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const choices = document.createElement('div')
     choices.className = 'sh-dest-choices'
-    choices.appendChild(makeDestBtn('Insert into Message', 'Append this image inline in the chat message', () => {
+    choices.appendChild(makeDestBtn('Insert', 'Append to message', () => {
       ctx.sendToBackend({ type: 'insert_into_message', imageId, messageId, chatId })
       modal.dismiss()
     }))
-    choices.appendChild(makeDestBtn('Done', 'Image is already saved to the character gallery', () => {
+    choices.appendChild(makeDestBtn('Regenerate Image', 'Use same prompts', async () => {
+      const resolvedPrompt = prompt.trim()
+      if (!resolvedPrompt) {
+        modal.dismiss()
+        showErrorModal('Cannot regenerate because the resolved prompt was not returned by native ImageGen.')
+        return
+      }
+
+      modal.dismiss()
+      setGeneratingState(true)
+      try {
+        const result = await callImageGen(chatId, {
+          prompt: resolvedPrompt,
+          negativePrompt,
+          skipParse: true,
+        })
+        handleGenerationResult(result, messageId, chatId, isAuto)
+      } catch (err: any) {
+        setGeneratingState(false)
+        showErrorModal(parseErrorMessage(err.message))
+      }
+    }))
+    choices.appendChild(makeDestBtn('Start again', 'Rebuild prompt', () => {
+      modal.dismiss()
+      triggerGenerate(messageId, chatId, isAuto)
+    }))
+    choices.appendChild(makeDestBtn('Done', 'Close modal', () => {
       modal.dismiss()
     }))
     container.appendChild(choices)

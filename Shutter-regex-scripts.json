@@ -4,7 +4,7 @@
   "scripts": [
     {
       "name": "Shutter",
-      "find_regex": "\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9\-]+\)",
+      "find_regex": "\\n*!\\[shutter\\]\\(/api/v1/(?:images|image-gen/results)/[a-f0-9\\-]+\\)",
       "replace_string": "",
       "flags": "gi",
       "placement": [

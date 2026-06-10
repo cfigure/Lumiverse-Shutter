@@ -1,5 +1,5 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "name": "Shutter",
   "identifier": "shutter",
   "author": "cfigure",
@@ -8,8 +8,7 @@
   "description": "Quick-access widget for native Lumiverse ImageGen with configurable inline insertion automation.",
   "permissions": [
     "chat_mutation",
-    "ui_panels",
-    "generation"
+    "ui_panels"
   ],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",

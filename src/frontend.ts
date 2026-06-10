@@ -16,6 +16,8 @@ type Settings = {
   autoGenerateRandomMax: number
   autoGenerateAfter: 'auto_insert' | 'ask_to_insert'
   autoPreviewPrompt: boolean
+  defaultAction: 'append' | 'replace'
+  deleteConfirmation: 'never' | 'bulk_only' | 'always'
 }
 
 type GenerationResult = {
@@ -31,6 +33,7 @@ type GenerationResult = {
 const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72 }
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
+const LONG_PRESS_MS = 500
 
 // ── Helpers ──
 
@@ -127,7 +130,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Permissions ──
 
   ctx.permissions.getGranted().then((granted: string[]) => {
-    const needed = ['chat_mutation', 'ui_panels', 'generation']
+    const needed = ['chat_mutation', 'ui_panels']
     const missing = needed.filter(p => !granted.includes(p))
     if (missing.length === 0) return
     ctx.ui.showConfirm({
@@ -187,19 +190,15 @@ export function setup(ctx: SpindleFrontendContext) {
     .sh-input-num:focus { border-color: var(--lumiverse-primary); }
 
     /* ── Destination modal ── */
-    .sh-modal-body { padding: 8px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+    /* padding 0 is correct: the host modal content area already supplies the
+   native 16px padding and 8px gap (SpindleUIManager). Adding more here
+   overflows the 520px height cap and brings back the scrollbar. */
+    .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .sh-replace-row { padding: 2px 0; }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
-    .sh-preview img { display: block; width: 100%; max-height: min(34vh, 280px); object-fit: contain; }
-
-    /* Action buttons — matches FormComponents.module.css .btn */
-    .sh-dest-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .sh-dest-btn { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 7px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); cursor: pointer; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; font-family: inherit; text-align: left; transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast); }
-    .sh-dest-btn:hover { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
-    .sh-dest-label { font-weight: 500; color: var(--lumiverse-text); }
-    .sh-dest-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin-top: 1px; line-height: 1.25; }
-    @media (max-width: 560px) { .sh-dest-choices { grid-template-columns: 1fr; } }
+    .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }
@@ -207,21 +206,21 @@ export function setup(ctx: SpindleFrontendContext) {
     .sh-lightbox img { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: var(--lcs-radius-sm, 8px); cursor: default; }
 
     /* ── Prompt preview modal — matches InputPromptModal.module.css ── */
-    .sh-prompt-subtitle { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); margin: 0; padding: 0; line-height: 1.5; }
-    .sh-prompt-body { padding: 8px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
-    .sh-prompt-field { display: flex; flex-direction: column; gap: 4px; }
+    .sh-prompt-subtitle { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); margin: 0; padding: 0; line-height: 1.5; }
+    .sh-prompt-body { padding: 0; display: flex; flex-direction: column; gap: 14px; }
+    .sh-prompt-field { display: flex; flex-direction: column; gap: 6px; }
     .sh-prompt-label { font-size: calc(11px * var(--lumiverse-font-scale, 1)); font-weight: 600; color: var(--lumiverse-text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
     /* Textareas — matches InputPromptModal.module.css .textarea */
-    .sh-prompt-textarea { width: 100%; min-height: 120px; max-height: 200px; padding: 12px 14px; border-radius: var(--lcs-radius-sm, 8px); border: 1px solid var(--lumiverse-border); background: var(--lumiverse-bg-dark); color: var(--lumiverse-text); font-size: calc(13px * var(--lumiverse-font-scale, 1)); line-height: 1.5; resize: vertical; font-family: inherit; transition: border-color var(--lumiverse-transition-fast); box-sizing: border-box; }
+    .sh-prompt-textarea { width: 100%; min-height: 120px; max-height: 280px; padding: 12px 14px; border-radius: var(--lcs-radius-sm, 8px); border: 1px solid var(--lumiverse-border); background: var(--lumiverse-bg-dark); color: var(--lumiverse-text); font-size: calc(13px * var(--lumiverse-font-scale, 1)); line-height: 1.5; resize: vertical; font-family: inherit; transition: border-color var(--lumiverse-transition-fast); box-sizing: border-box; }
     .sh-prompt-textarea::placeholder { color: var(--lumiverse-text-dim); }
     .sh-prompt-textarea:focus { outline: none; border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
-    .sh-prompt-textarea-short { min-height: 80px; }
+    .sh-prompt-textarea-short { min-height: 64px; max-height: 160px }
 
     .sh-prompt-error { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-danger, #e55); }
 
     /* Actions — matches InputPromptModal.module.css .actions / .btn* */
-    .sh-prompt-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+    .sh-prompt-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .sh-prompt-btn { padding: 8px 18px; border-radius: var(--lcs-radius-sm, 8px); font-size: calc(12.5px * var(--lumiverse-font-scale, 1)); font-weight: 600; font-family: inherit; cursor: pointer; border: 1px solid var(--lumiverse-border); transition: all var(--lumiverse-transition-fast); }
     .sh-prompt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -236,6 +235,12 @@ export function setup(ctx: SpindleFrontendContext) {
     /* Primary (Generate) — matches .btnSubmit */
     .sh-prompt-btn-primary { background: var(--lumiverse-primary-015, rgba(147,112,219,0.15)); color: var(--lumiverse-primary-text, #c4b5fd); border-color: var(--lumiverse-primary-020, rgba(147,112,219,0.2)); }
     .sh-prompt-btn-primary:hover:not(:disabled) { background: var(--lumiverse-primary-025, rgba(147,112,219,0.25)); border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
+
+    /* Mobile: action rows snap to an equal-width grid (native has no mobile treatment) */
+    @media (max-width: 560px) {
+      .sh-prompt-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+      .sh-prompt-actions > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+    }
   `)
 
   // ── Settings panel (mount-once pattern) ──
@@ -269,6 +274,8 @@ export function setup(ctx: SpindleFrontendContext) {
   let selectAfterGenerate: HTMLSelectElement | null = null
   let selectAutoGenerate: HTMLSelectElement | null = null
   let selectAutoGenerateAfter: HTMLSelectElement | null = null
+  let selectDefaultAction: HTMLSelectElement | null = null
+  let selectDeleteConfirmation: HTMLSelectElement | null = null
 
   function makeRow(labelText: string, descText: string): { row: HTMLElement; controlSlot: HTMLElement } {
     const row = document.createElement('div')
@@ -373,6 +380,26 @@ export function setup(ctx: SpindleFrontendContext) {
       (v) => updateSettings({ afterGenerate: v as Settings['afterGenerate'] }),
     )
     afterRow.controlSlot.appendChild(selectAfterGenerate)
+
+    // Default Action — native <select>
+    const defaultActionRow = makeRow('Default Widget Action', 'What pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    container.appendChild(defaultActionRow.row)
+    selectDefaultAction = makeSelect(
+      [{ value: 'append', label: 'Append' }, { value: 'replace', label: 'Replace' }],
+      s.defaultAction,
+      (v) => updateSettings({ defaultAction: v as Settings['defaultAction'] }),
+    )
+    defaultActionRow.controlSlot.appendChild(selectDefaultAction)
+
+    // Delete Confirmation — native <select>
+    const deleteConfirmRow = makeRow('Remove Confirmation', 'When to show a confirmation before removing images. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    container.appendChild(deleteConfirmRow.row)
+    selectDeleteConfirmation = makeSelect(
+      [{ value: 'never', label: 'Never' }, { value: 'bulk_only', label: 'Bulk only' }, { value: 'always', label: 'Always' }],
+      s.deleteConfirmation,
+      (v) => updateSettings({ deleteConfirmation: v as Settings['deleteConfirmation'] }),
+    )
+    deleteConfirmRow.controlSlot.appendChild(selectDeleteConfirmation)
 
     // ── Auto Generate section (shared collapsible) ──
 
@@ -506,6 +533,8 @@ export function setup(ctx: SpindleFrontendContext) {
     selectAfterGenerate = null
     selectAutoGenerate = null
     selectAutoGenerateAfter = null
+    selectDefaultAction = null
+    selectDeleteConfirmation = null
   }
 
   function syncSettingsToHandles(s: Settings) {
@@ -526,6 +555,8 @@ export function setup(ctx: SpindleFrontendContext) {
     if (selectAfterGenerate) selectAfterGenerate.value = s.afterGenerate
     if (selectAutoGenerate) selectAutoGenerate.value = s.autoGenerate
     if (selectAutoGenerateAfter) selectAutoGenerateAfter.value = s.autoGenerateAfter
+    if (selectDefaultAction) selectDefaultAction.value = s.defaultAction
+    if (selectDeleteConfirmation) selectDeleteConfirmation.value = s.deleteConfirmation
 
     updateAutoRowVisibility(s.autoGenerate)
   }
@@ -535,6 +566,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let cachedNativeSettings: Record<string, any> | null = null
   let nativeSettingsFetchedAt = 0
 
+// Raw fetch is deliberate; see the note above callImageGen below.
   async function fetchNativeSettings(): Promise<Record<string, any>> {
     try {
       const resp = await fetch('/api/v1/settings/imageGeneration')
@@ -567,7 +599,12 @@ export function setup(ctx: SpindleFrontendContext) {
       ctx.sendToBackend({ type: 'resolve_last_message_id', requestId, chatId })
     })
   }
-
+  
+  // Deliberate raw fetch, and it must stay frontend-side: these are the
+  // native scene-pipeline routes, which have no Spindle API equivalent
+  // (spindle.imageGen is the connection-profile API, a different pipeline),
+  // and they authenticate via the user's browser session, which the backend
+  // subprocess does not have.
   async function callImageGen(chatId: string, overrides?: Record<string, any>): Promise<GenerationResult> {
     const native = await fetchNativeSettings()
     const body: Record<string, any> = {
@@ -629,7 +666,7 @@ export function setup(ctx: SpindleFrontendContext) {
     updateFloatBtnState()
   }
 
-  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean) {
+  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace = false) {
     setGeneratingState(false)
     resetAutoGenCounter()
 
@@ -637,15 +674,15 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const afterAction = isAuto ? settings?.autoGenerateAfter : settings?.afterGenerate
     if (afterAction === 'auto_insert') {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId })
+      ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId, replace })
     } else {
-      openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto)
+      openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto, replace)
     }
   }
 
   // ── Generate ──
 
-  async function triggerGenerate(messageId?: string, chatId?: string, isAuto = false) {
+  async function triggerGenerate(messageId?: string, chatId?: string, isAuto = false, replace = false) {
     if (generating || promptPreviewOpen) return
 
     if (!chatId) {
@@ -678,16 +715,19 @@ export function setup(ctx: SpindleFrontendContext) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId, isAuto)
+          openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId, isAuto, replace)
         } catch (err: any) {
           setGeneratingState(false)
           if (!isAuto) showErrorModal(parseErrorMessage(err.message))
         }
         return
       }
-
+      
+      // '__last__' is resolved backend-side at execution time, never earlier.
+      // Do not pre-resolve to a concrete ID in the frontend; see the design
+      // note above resolveTarget() in backend.ts.
       const result = await callImageGen(chatId)
-      handleGenerationResult(result, messageId || '__last__', chatId, isAuto)
+      handleGenerationResult(result, messageId || '__last__', chatId, isAuto, replace)
     } catch (err: any) {
       setGeneratingState(false)
       if (!isAuto) {
@@ -712,9 +752,73 @@ export function setup(ctx: SpindleFrontendContext) {
     floatWidget.setVisible(event.chatId !== null)
   })
 
+  // ── Delete image ──
+
+  async function deleteImage() {
+    const active = ctx.getActiveChat()
+    const chatId = active.chatId ?? undefined
+    if (!chatId) return
+
+    if (settings?.deleteConfirmation === 'always') {
+      const { confirmed } = await ctx.ui.showConfirm({
+        title: 'Remove Image',
+        message: 'Remove the last Shutter image from the last message?',
+        variant: 'danger',
+        confirmLabel: 'Remove',
+      })
+      if (!confirmed) return
+    }
+
+    ctx.sendToBackend({ type: 'delete_image', messageId: '__last__', chatId })
+  }
+
+  async function deleteAllImages() {
+    const active = ctx.getActiveChat()
+    const chatId = active.chatId ?? undefined
+    if (!chatId) return
+
+    if (settings?.deleteConfirmation !== 'never') {
+      const { confirmed } = await ctx.ui.showConfirm({
+        title: 'Remove All Images',
+        message: 'Remove all Shutter images from the last message? This cannot be undone.',
+        variant: 'danger',
+        confirmLabel: 'Remove All',
+      })
+      if (!confirmed) return
+    }
+
+    ctx.sendToBackend({ type: 'delete_all_images', messageId: '__last__', chatId })
+  }
+
+  // ── Widget context menu ──
+
+  async function showWidgetMenu(x: number, y: number) {
+    // Consistency with the widget lock: while a generation is in flight the
+    // widget is disabled and spinning, so the advanced menu (both long-press
+    // and right-click paths route through here) is locked too.
+    if (generating) return
+    const { selectedKey } = await ctx.ui.showContextMenu({
+      position: { x, y },
+      items: [
+        { key: '_header', label: 'Last Message', disabled: true },
+        { key: 'div0', label: '', type: 'divider' },
+        { key: 'append', label: 'Append' },
+        { key: 'replace', label: 'Replace' },
+        { key: 'div1', label: '', type: 'divider' },
+        { key: 'delete', label: 'Remove', danger: true },
+        { key: 'delete_all', label: 'Remove All', danger: true },
+      ],
+    })
+
+    if (selectedKey === 'append') triggerGenerate()
+    else if (selectedKey === 'replace') triggerGenerate(undefined, undefined, false, true)
+    else if (selectedKey === 'delete') deleteImage()
+    else if (selectedKey === 'delete_all') deleteAllImages()
+  }
+
   // ── Float widget ──
 
-  function setupFloatWidget() {
+   function setupFloatWidget() {
     if (floatWidget) return
     if (!settings) return
     const size = WIDGET_SIZES[settings.widgetSize] || 44
@@ -729,25 +833,56 @@ export function setup(ctx: SpindleFrontendContext) {
     btn.innerHTML = settings.widgetStyle === 'mono' ? ICON_FLOAT_MONO : ICON_FLOAT_COLOR
 
     let pointerStart: { x: number; y: number; time: number } | null = null
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null
+    let longPressFired = false
 
     btn.addEventListener('pointerdown', (e) => {
+      // Primary button / touch only. Right-click is handled exclusively by
+      // the contextmenu listener, so it must not arm the tap or long-press
+      // tracker (misc: right-click was triggering a generation AND the menu).
+      if (e.button !== 0) return
       pointerStart = { x: e.clientX, y: e.clientY, time: Date.now() }
+      longPressFired = false
+      longPressTimer = setTimeout(() => {
+        longPressFired = true
+        longPressTimer = null
+        navigator.vibrate?.(50)
+        showWidgetMenu(e.clientX, e.clientY)
+      }, LONG_PRESS_MS)
+    })
+
+    btn.addEventListener('pointermove', (e) => {
+      if (!pointerStart || !longPressTimer) return
+      const dx = Math.abs(e.clientX - pointerStart.x)
+      const dy = Math.abs(e.clientY - pointerStart.y)
+      if (dx > DRAG_THRESHOLD_PX || dy > DRAG_THRESHOLD_PX) {
+        clearTimeout(longPressTimer)
+        longPressTimer = null
+      }
     })
 
     btn.addEventListener('pointerup', (e) => {
-      if (!pointerStart) return
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+      if (e.button !== 0) { pointerStart = null; return }
+      if (!pointerStart || longPressFired) { pointerStart = null; return }
       const dx = Math.abs(e.clientX - pointerStart.x)
       const dy = Math.abs(e.clientY - pointerStart.y)
       const dt = Date.now() - pointerStart.time
       pointerStart = null
 
       if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
-        triggerGenerate()
+        triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace')
       }
     })
 
     btn.addEventListener('pointercancel', () => {
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
       pointerStart = null
+    })
+
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      showWidgetMenu(e.clientX, e.clientY)
     })
 
     floatWidget.root.appendChild(btn)
@@ -783,18 +918,26 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const inputAction = ctx.ui.registerInputBarAction({
     id: 'shutter-generate',
-    label: 'Shutter',
+    label: 'Generate Image',
     iconSvg: ICON_INPUT_BAR,
   })
-  inputAction.onClick(() => triggerGenerate())
+  inputAction.onClick(() => triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace'))
 
   // ── Auto-generate: listen for AI messages ──
+  // Frontend event listening rides the user's own WebSocket and is ungated.
+  // Backend subscriptions to generation lifecycle events require the
+  // 'generation' permission. If this listener ever moves server-side,
+  // 'generation' goes back into spindle.json.  
 
   const unsubCharMsg = ctx.events.on('GENERATION_ENDED', (event: any) => {
     if (!settings || settings.autoGenerate === 'off') return
     if (event.error || event.impersonateDraft) return
     autoGenCounter++
     if (autoGenCounter >= autoGenTarget) {
+      // Auto-insert is anchored to the AI message that triggered it. The
+      // image illustrates that response's scene. If the event ever arrives
+      // without a messageId, downstream falls back to '__last__' (the
+      // literal newest message at insert time).
       triggerGenerate(event.messageId, event.chatId, true)
     }
   })
@@ -841,16 +984,17 @@ export function setup(ctx: SpindleFrontendContext) {
     document.body.appendChild(overlay)
   }
 
-  function makeDestBtn(label: string, desc: string, onClick: () => void): HTMLElement {
+  function makeDestBtn(label: string, tooltip: string, variant: string, onClick: () => void): HTMLElement {
     const btn = document.createElement('button')
-    btn.className = 'sh-dest-btn'
-    btn.innerHTML = `<div><div class="sh-dest-label">${label}</div><div class="sh-dest-desc">${desc}</div></div>`
+    btn.className = `sh-prompt-btn ${variant}`
+    btn.textContent = label
+    btn.title = tooltip
     btn.addEventListener('click', onClick)
     return btn
   }
 
-  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean) {
-    const modal = ctx.ui.showModal({ title: 'Image Generated', width: 560, persistent: true })
+  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
+    const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 
@@ -862,13 +1006,29 @@ export function setup(ctx: SpindleFrontendContext) {
     previewWrap.appendChild(preview)
     container.appendChild(previewWrap)
 
+    // Replace checkbox
+    let replaceChecked = replace || (settings?.defaultAction === 'replace')
+    const replaceSlot = document.createElement('div')
+    replaceSlot.className = 'sh-replace-row'
+    const replaceCheckbox = ctx.components.mountCheckbox(replaceSlot, {
+      checked: replaceChecked,
+      label: 'Replace existing image',
+      onChange: (on: boolean) => {
+        replaceChecked = on
+      },
+    })
+    container.appendChild(replaceSlot)
+
     const choices = document.createElement('div')
-    choices.className = 'sh-dest-choices'
-    choices.appendChild(makeDestBtn('Insert', 'Append to message', () => {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId, messageId, chatId })
+    choices.className = 'sh-prompt-actions'
+    choices.appendChild(makeDestBtn('Done', 'Close without inserting', 'sh-prompt-btn-cancel', () => {
       modal.dismiss()
     }))
-    choices.appendChild(makeDestBtn('Regenerate Image', 'Use same prompts', async () => {
+    choices.appendChild(makeDestBtn('Rebuild Prompt', 'Re-parse the chat and generate a new prompt', 'sh-prompt-btn-secondary', () => {
+      modal.dismiss()
+      triggerGenerate(messageId, chatId, isAuto, replaceChecked)
+    }))
+    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the same prompt', 'sh-prompt-btn-secondary', async () => {
       const resolvedPrompt = prompt.trim()
       if (!resolvedPrompt) {
         modal.dismiss()
@@ -884,21 +1044,22 @@ export function setup(ctx: SpindleFrontendContext) {
           negativePrompt,
           skipParse: true,
         })
-        handleGenerationResult(result, messageId, chatId, isAuto)
+        handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked)
       } catch (err: any) {
         setGeneratingState(false)
         showErrorModal(parseErrorMessage(err.message))
       }
     }))
-    choices.appendChild(makeDestBtn('Start again', 'Rebuild prompt', () => {
-      modal.dismiss()
-      triggerGenerate(messageId, chatId, isAuto)
-    }))
-    choices.appendChild(makeDestBtn('Done', 'Close modal', () => {
+    choices.appendChild(makeDestBtn('Insert', 'Append to the last message', 'sh-prompt-btn-primary', () => {
+      ctx.sendToBackend({ type: 'insert_into_message', imageId, messageId, chatId, replace: replaceChecked })
       modal.dismiss()
     }))
     container.appendChild(choices)
     modal.root.appendChild(container)
+
+    modal.onDismiss(() => {
+      replaceCheckbox.destroy()
+    })
   }
 
   function showErrorModal(message: string) {
@@ -911,12 +1072,15 @@ export function setup(ctx: SpindleFrontendContext) {
     })
   }
 
-  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, chatId: string, messageId?: string, isAuto = false) {
+  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, chatId: string, messageId?: string, isAuto = false, replace = false) {
     if (promptPreviewOpen) return
     promptPreviewOpen = true
     const modal = ctx.ui.showModal({ title: 'Preview & Edit Image Prompt', width: 640, persistent: true })
+    // Reset the gate on every dismissal path — Cancel, Generate, the header
+    // close button, and Escape — so a dismissed preview can never wedge
+    // future generations.
+    modal.onDismiss(() => { promptPreviewOpen = false })
     function closePromptModal() {
-      promptPreviewOpen = false
       modal.dismiss()
     }
     const container = document.createElement('div')
@@ -975,12 +1139,16 @@ export function setup(ctx: SpindleFrontendContext) {
     const generateBtn = document.createElement('button')
     generateBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'
     generateBtn.textContent = 'Generate'
+    generateBtn.disabled = !initialPrompt.trim()
+    promptTextarea.addEventListener('input', () => {
+      if (!promptTextarea.disabled) generateBtn.disabled = !promptTextarea.value.trim()
+    })
 
     function setBusy(busy: boolean) {
       rerunBtn.disabled = busy
-      generateBtn.disabled = busy
-      cancelBtn.disabled = busy
       promptTextarea.disabled = busy
+      cancelBtn.disabled = busy
+      generateBtn.disabled = busy || !promptTextarea.value.trim()
       negTextarea.disabled = busy
       rerunBtn.textContent = busy ? 'Regenerating\u2026' : 'Re-run parser'
     }
@@ -1016,7 +1184,7 @@ export function setup(ctx: SpindleFrontendContext) {
           negativePrompt: negTextarea.value,
           skipParse: true,
         })
-        handleGenerationResult(result, messageId || '__last__', chatId, isAuto)
+        handleGenerationResult(result, messageId || '__last__', chatId, isAuto, replace)
       } catch (err: any) {
         setGeneratingState(false)
         showErrorModal(parseErrorMessage(err.message))

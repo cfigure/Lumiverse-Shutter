@@ -15,13 +15,17 @@ type Settings = {
   autoGenerateRandomMax: number
   autoGenerateAfter: 'auto_insert' | 'ask_to_insert'
   autoPreviewPrompt: boolean
+  defaultAction: 'append' | 'replace'
+  deleteConfirmation: 'never' | 'bulk_only' | 'always'
 }
 
 type FrontendMessage =
   | { type: 'request_settings' }
   | { type: 'update_settings'; settings: Partial<Settings> }
-  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string }
+  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; replace?: boolean }
   | { type: 'resolve_last_message_id'; requestId: string; chatId: string }
+  | { type: 'delete_image'; messageId: string; chatId: string }
+  | { type: 'delete_all_images'; messageId: string; chatId: string }
 
 const DEFAULT_SETTINGS: Settings = {
   showFloatWidget: false,
@@ -36,6 +40,8 @@ const DEFAULT_SETTINGS: Settings = {
   autoGenerateRandomMax: 7,
   autoGenerateAfter: 'auto_insert',
   autoPreviewPrompt: false,
+  defaultAction: 'append',
+  deleteConfirmation: 'bulk_only',
 }
 
 // ── Validation ──
@@ -62,9 +68,56 @@ async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<
   return merged
 }
 
+// ── Image manipulation ──
+// Keep in sync with Shutter-regex-scripts.json, which uses this same
+// pattern (unanchored, 'gi') to strip these tags from the LLM prompt.
+
+const SHUTTER_IMAGE_SOURCE = String.raw`\n{0,2}!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9-]+\)`
+const SHUTTER_IMAGE_RE = new RegExp(`${SHUTTER_IMAGE_SOURCE}$`, 'i')
+const SHUTTER_IMAGE_GLOBAL_RE = new RegExp(SHUTTER_IMAGE_SOURCE, 'gi')
+
+function stripLastShutterImage(content: string): { content: string; found: boolean } {
+  const match = content.match(SHUTTER_IMAGE_RE)
+  if (!match) return { content, found: false }
+  return { content: content.slice(0, match.index), found: true }
+}
+
+function stripAllShutterImages(content: string): { content: string; count: number } {
+  let count = 0
+  const stripped = content.replace(SHUTTER_IMAGE_GLOBAL_RE, () => { count++; return '' })
+  return { content: stripped, count }
+}
+
+// ── Message resolution ──
+//
+// '__last__' = the literal newest message, any role, resolved at execution
+// time. Deliberate: do NOT retarget this to the last AI message. That was
+// tried and reverted. Last-AI lets Remove/Replace reach past a trailing
+// user message or a deletion and silently strip an older reply's image
+// (destructive, invisible). Literal-last's worst case is an image landing
+// on the user's own queued message (additive, visible, reversible).
+// Matches native ImageGen's attach-to-last (messages[length - 1]).
+// Full rationale: CHANGES.md, "Message targeting".
+type ShutterMessage = { id: string; content: string; role: string; index_in_chat: number }
+
+function orderedMessages<T extends ShutterMessage>(messages: T[]): T[] {
+  return [...messages].sort((a, b) => a.index_in_chat - b.index_in_chat)
+}
+
+function resolveTarget<T extends ShutterMessage>(messages: T[], messageId: string): { target?: T; error?: string } {
+  if (messageId === '__last__') {
+    const ordered = orderedMessages(messages)
+    const target = ordered[ordered.length - 1]
+    return target ? { target } : { error: 'No messages in chat.' }
+  }
+  const target = messages.find(m => m.id === messageId)
+  return target ? { target } : { error: 'Message not found.' }
+}
+
 // ── Frontend messages ──
 
-spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
+spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
+  const payload = raw as FrontendMessage
   try {
     switch (payload.type) {
 
@@ -91,26 +144,12 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
           }, userId)
           return
         }
-
-        const messages = await spindle.chat.getMessages(payload.chatId) as Array<{
-          id?: string
-          createdAt?: string
-          created_at?: string
-          timestamp?: string
-        }>
-
-        const valid = Array.isArray(messages) ? messages.filter(m => typeof m?.id === 'string') : []
-        const sortable = valid.every(m => {
-          const raw = m.createdAt || m.created_at || m.timestamp
-          return typeof raw === 'string' && !Number.isNaN(Date.parse(raw))
-        })
-        const ordered = sortable
-          ? [...valid].sort((a, b) => {
-              const at = Date.parse(a.createdAt || a.created_at || a.timestamp || '')
-              const bt = Date.parse(b.createdAt || b.created_at || b.timestamp || '')
-              return at - bt
-            })
-          : valid
+        
+        // Mirror native ImageGen's attach_to_message semantics: the literal
+        // last message in the chat, regardless of role (ImageGenPanel does
+        // messages[messages.length - 1] at click time).
+        const messages = await spindle.chat.getMessages(payload.chatId)
+        const ordered = orderedMessages(messages)
         const last = ordered[ordered.length - 1]
 
         spindle.sendToFrontend({
@@ -127,17 +166,10 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
           return
         }
 
-        const messages = await spindle.chat.getMessages(payload.chatId) as Array<{ id: string; content: string }>
+        const messages = await spindle.chat.getMessages(payload.chatId)
 
-        let targetId = payload.messageId
-        if (targetId === '__last__') {
-          const last = messages[messages.length - 1]
-          if (!last) { spindle.toast.error('No messages in chat.'); return }
-          targetId = last.id
-        }
-
-        const target = messages.find(m => m.id === targetId)
-        if (!target) { spindle.toast.error('Message not found.'); return }
+        const { target, error } = resolveTarget(messages, payload.messageId)
+        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
 
         const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
         if (target.content.includes(imageUrl)) {
@@ -145,19 +177,78 @@ spindle.onFrontendMessage(async (payload: FrontendMessage, userId?: string) => {
           return
         }
 
-        await spindle.chat.updateMessage(payload.chatId, targetId, {
-          content: target.content + `\n\n![shutter](${imageUrl})`,
+        let baseContent = target.content
+        let didReplace = false
+        if (payload.replace) {
+          const stripped = stripLastShutterImage(baseContent)
+          baseContent = stripped.content
+          didReplace = stripped.found
+        }
+
+        await spindle.chat.updateMessage(payload.chatId, target.id, {
+          content: baseContent + `\n\n![shutter](${imageUrl})`,
         })
 
         const settings = await loadSettings(userId)
         if (settings.toastOnInsert) {
-          spindle.toast.success('Image inserted into message.')
+          spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.')
         }
+        break
+      }
+
+      case 'delete_image': {
+        if (!spindle.permissions.has('chat_mutation')) {
+          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.')
+          return
+        }
+
+        const messages = await spindle.chat.getMessages(payload.chatId)
+
+        const { target, error } = resolveTarget(messages, payload.messageId)
+        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
+
+        const stripped = stripLastShutterImage(target.content)
+        if (!stripped.found) {
+          spindle.toast.warning('No Shutter image found in message.')
+          return
+        }
+
+        await spindle.chat.updateMessage(payload.chatId, target.id, {
+          content: stripped.content,
+        })
+
+        spindle.toast.success('Image removed from message.')
+        break
+      }
+
+      case 'delete_all_images': {
+        if (!spindle.permissions.has('chat_mutation')) {
+          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.')
+          return
+        }
+
+        const messages = await spindle.chat.getMessages(payload.chatId)
+
+        const { target, error } = resolveTarget(messages, payload.messageId)
+        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
+
+        const stripped = stripAllShutterImages(target.content)
+        if (stripped.count === 0) {
+          spindle.toast.warning('No Shutter images found in message.')
+          return
+        }
+
+        await spindle.chat.updateMessage(payload.chatId, target.id, {
+          content: stripped.content,
+        })
+
+        spindle.toast.success(`Removed ${stripped.count} image${stripped.count > 1 ? 's' : ''} from message.`)
         break
       }
     }
   } catch (err: any) {
-    spindle.log.error(`[${payload.type}] ${err.message}`)
+    const msgType = (payload && typeof payload === 'object' && 'type' in payload) ? (payload as { type: string }).type : 'unknown'
+    spindle.log.error(`[${msgType}] ${err.message}`)
   }
 })
 

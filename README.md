@@ -13,7 +13,7 @@ What happens after generation depends on how ImageGen is configured:
 
 When Shutter shows the ask-to-insert modal, you can also choose **Regenerate Image** to create a new image from the same resolved positive and negative prompts, or **Rebuild Prompt** to restart the normal Shutter generation flow from the original chat/message context. Tick **Replace existing image** to swap out the last Shutter image in the message instead of appending another.
 
-Long-press or right-click the floating widget to open the advanced menu for the last message: **Append** a new image, **Replace** the last Shutter image, **Remove** the last Shutter image, or **Remove All** Shutter images. The menu is locked while a generation is in flight, matching the widget.
+Long-press or right-click the floating widget to open the advanced menu for the last message: **Append** a new image, **Replace** the last Shutter image, **Remove** the last Shutter image, or **Remove All** Shutter images from the last message.
 
 Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
 
@@ -37,7 +37,7 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Toast on Insert** — show a notification when an image is inserted into a message
 - **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
 - **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
-- **Default Widget Action** — what pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (append / replace)
+- **Default Widget Action** — what pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. If no image is inserted, Replace acts as normal Append. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (append / replace)
 - **Delete Confirmation** — when to ask before removing images via the advanced menu (never / bulk only / always)
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter shows its own prompt preview modal before manual generations. This mirrors the native preview flow because extensions cannot mount the native React prompt-preview component directly. You can review and edit the resolved prompt, re-run the parser, or generate directly.

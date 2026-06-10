@@ -10,5 +10,7 @@
   "autoGenerateRandomMin": 3,
   "autoGenerateRandomMax": 7,
   "autoGenerateAfter": "auto_insert",
-  "autoPreviewPrompt": false
+  "autoPreviewPrompt": false,
+  "defaultAction": "append",
+  "deleteConfirmation": "bulk_only"
 }

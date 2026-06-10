@@ -8,16 +8,18 @@ Shutter adds a floating widget and an input bar action that let you trigger Lumi
 
 What happens after generation depends on how ImageGen is configured:
 
-- **Preview only and Set as background** — Images are appended to the last message in the chat. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same. For Shutter workflows, **Preview only** is recommended.
+- **Preview only and Set as background** — Images are inserted into the last message in the chat, resolved at the moment of insertion. By default Shutter appends a new image, but it can also replace the most recent Shutter image when configured or selected. Shutter only ever acts on the newest message and never reaches further back. Shutter either shows a modal asking whether to insert the generated image, or auto-inserts it, depending on your **After Generate** setting. Shutter does not set the generated image as an active background when 'Set as background' is selected. Functionally, Shutter treats these two generations the same. For Shutter workflows, **Preview only** is recommended.
 - **Insert into chat / Attach to last message** — ImageGen handles image placement natively, so Shutter has nothing more to do. Shutter auto-generate is skipped in these modes.
 
-When Shutter shows the ask-to-insert modal, you can also choose **Regenerate Image** to create a new image from the same resolved positive and negative prompts, or **Start again** to restart the normal Shutter generation flow from the original chat/message context.
+When Shutter shows the ask-to-insert modal, you can also choose **Regenerate Image** to create a new image from the same resolved positive and negative prompts, or **Rebuild Prompt** to restart the normal Shutter generation flow from the original chat/message context. Tick **Replace existing image** to swap out the last Shutter image in the message instead of appending another.
+
+Long-press or right-click the floating widget to open the advanced menu for the last message: **Append** a new image, **Replace** the last Shutter image, **Remove** the last Shutter image, or **Remove All** Shutter images. The menu is locked while a generation is in flight, matching the widget.
 
 Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
 
 ### Auto Generate
 
-Shutter can automatically trigger native ImageGen after AI responses. Auto-generate is skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" mode, because native ImageGen already handles placement in those modes. Shutter's automation is intended for inline/background-style workflows where Shutter may need to append the generated image markdown itself.
+Shutter can automatically trigger native ImageGen after AI responses. Auto-generate is skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" mode, because native ImageGen already handles placement in those modes. Shutter's automation is intended for inline/background-style workflows where Shutter may need to insert the generated image markdown itself.
 
 There are three auto-generate modes:
 
@@ -35,6 +37,8 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Toast on Insert** — show a notification when an image is inserted into a message
 - **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
 - **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
+- **Default Widget Action** — what pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (append / replace)
+- **Delete Confirmation** — when to ask before removing images via the advanced menu (never / bulk only / always)
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter shows its own prompt preview modal before manual generations. This mirrors the native preview flow because extensions cannot mount the native React prompt-preview component directly. You can review and edit the resolved prompt, re-run the parser, or generate directly.
 
@@ -65,15 +69,14 @@ Shutter requires Lumiverse 1.0.0 or newer.
 
 ### Compatibility notes
 
-**Force Generation** exposes Lumiverse’s native ImageGen force-generate behaviour; Shutter does not implement its own scene-change logic. The setting is included because Shutter v1.0.0 always triggered native ImageGen with force generation enabled. Most users can leave it off.
+**Force Generation** exposes Lumiverse’s native ImageGen force-generate behaviour; Shutter does not implement its own scene-change logic. The setting is included because Shutter v1.0.0 always triggered native ImageGen with force generation enabled, and it defaults to on to preserve that behaviour. Turn it off if you want generation to respect Lumiverse's scene-change threshold.
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
-| `chat_mutation` | Append native ImageGen output markdown to the original assistant message when inline insertion is needed. |
+| `chat_mutation` | Append, replace, or remove Shutter image markdown in chat messages when inline insertion or cleanup is needed. |
 | `ui_panels` | Render Shutter's settings UI and quick-access controls. |
-| `generation` | Listen for Lumiverse generation lifecycle events so Shutter can optionally trigger native ImageGen after assistant replies. |
 
 ## Installation
 

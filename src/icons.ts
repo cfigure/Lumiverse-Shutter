@@ -187,7 +187,7 @@ export const ICON_SETS: Record<ShutterIconId, ShutterIconSet> = {
     inputBar: CHERRY_BLOSSOM_INPUT_BAR,
   },
   cat_lotus: {
-    label: 'Cat Lotus',
+    label: 'Kitty Lotus',
     floatingMono: CAT_LOTUS_FLOAT_MONO,
     floatingColor: CAT_LOTUS_FLOAT_COLOR,
     inputBar: CAT_LOTUS_INPUT_BAR,

@@ -15,7 +15,9 @@ When Shutter shows the ask-to-insert modal, you can also choose **Regenerate Ima
 
 Long-press or right-click the floating widget to open the advanced menu for the last message: **Append** a new image, **Replace** the last Shutter image, **Remove** the last Shutter image, or **Remove All** Shutter images from the last message.
 
-Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. A [regex](Shutter-regex-scripts.json) script (included in the GitHub repo) can be imported to remove these tags and images before they're sent to the model.
+Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. By default these tags are stripped from the prompt before it is sent to the model — see **Remove Image Tags from Context** below. The image remains visible in chat through Lumiverse's viewer, but Shutter never sends the image itself as multimodal context.
+
+> **Legacy:** older Shutter versions shipped a [regex](Shutter-regex-scripts.json) script to strip these tags manually. That's now built in and the script is redundant on Lumiverse 1.0.0+. It's kept in the repo only for installs on a Lumiverse old enough to lack the `interceptor` permission; if you imported it previously, you can delete it.
 
 ### Auto Generate
 
@@ -34,8 +36,10 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Floating Widget** — show a quick-access generate button on screen
 - **Widget Size** — size of the floating button (Small 44px / Medium 56px / Large 72px)
 - **Widget Style** — icon style for the floating button (Colour / Monochrome)
+- **Icon** — choose the complete icon theme used by both the floating widget and input-bar action (Aperture / Cherry Blossom / Kitty Lotus)
 - **Toast on Insert** — show a notification when an image is inserted into a message
 - **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
+- **Remove Image Tags from Context** — controls only the `![shutter](...)` Markdown text. When on (the default), those tags are removed from prompts sent to the LLM while the image remains visible in chat. When off, the tags remain in the prompt. Shutter does not send the image itself as multimodal context in either mode.
 - **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
 - **Default Widget Action** — what pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. If no image is inserted, Replace acts as normal Append. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (append / replace)
 - **Delete Confirmation** — when to ask before removing images via the advanced menu (never / bulk only / always)
@@ -77,6 +81,7 @@ Shutter requires Lumiverse 1.0.0 or newer.
 |---|---|
 | `chat_mutation` | Append, replace, or remove Shutter image markdown in chat messages when inline insertion or cleanup is needed. |
 | `ui_panels` | Render Shutter's settings UI and quick-access controls. |
+| `interceptor` | Strip Shutter image tags from the prompt before it reaches the model when "Remove Image Tags from Context" is on. |
 
 ## Installation
 

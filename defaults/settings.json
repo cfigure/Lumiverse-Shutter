@@ -5,6 +5,7 @@
   "forceGeneration": true,
   "widgetSize": "small",
   "widgetStyle": "color",
+  "iconTheme": "aperture",
   "autoGenerate": "off",
   "autoGenerateInterval": 3,
   "autoGenerateRandomMin": 3,
@@ -12,5 +13,6 @@
   "autoGenerateAfter": "auto_insert",
   "autoPreviewPrompt": false,
   "defaultAction": "append",
-  "deleteConfirmation": "bulk_only"
+  "deleteConfirmation": "bulk_only",
+  "removeImageTagsFromContext": true
 }

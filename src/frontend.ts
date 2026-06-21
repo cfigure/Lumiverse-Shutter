@@ -1237,7 +1237,7 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!promptTextarea.disabled) generateBtn.disabled = !promptTextarea.value.trim()
     })
 
-  rerunBtn.addEventListener('click', async () => {
+    rerunBtn.addEventListener('click', async () => {
     closePromptModal()
     setGeneratingState(true)
 

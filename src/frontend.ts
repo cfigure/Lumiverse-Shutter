@@ -426,7 +426,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const insertionNote = document.createElement('div')
     insertionNote.className = 'sh-settings-note'
-    insertionNote.textContent = 'Applies only when Shutter handles insertion. No effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
+    insertionNote.textContent = 'The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
     container.appendChild(insertionNote)
 
     // Remove Image Tags from Context

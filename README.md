@@ -40,7 +40,7 @@ The counter resets after any generation, whether manual or automatic. Auto-gener
 - **Toast on Insert** — Show a notification when an image is inserted into a message
 - **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold. 
 
-### The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.
+The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.
 
 - **Remove Image Tags from Context** — Controls only the `![shutter](...)` Markdown text. When on (the default), those tags are removed from prompts sent to the LLM while the image remains visible in chat. When off, the tags remain in the prompt. Shutter does not send the image itself as multimodal context in either mode.
 - **After Generation** — What to do after a manual generation (ask to insert / auto insert)

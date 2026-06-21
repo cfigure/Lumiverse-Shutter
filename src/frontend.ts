@@ -376,7 +376,7 @@ export function setup(ctx: SpindleFrontendContext) {
     container.appendChild(sizeRow.row)
     rowWidgetSize = sizeRow.row
     selectWidgetSize = makeSelect(
-      [{ value: 'small', label: 'Small (44px)' }, { value: 'medium', label: 'Medium (56px)' }, { value: 'large', label: 'Large (72px)' }, { value: 'xlarge', label: 'XL (96px)' }],
+      [{ value: 'small', label: 'Small' }, { value: 'medium', label: 'Medium' }, { value: 'large', label: 'Large' }, { value: 'xlarge', label: 'XL' }],
       s.widgetSize,
       (v) => updateSettings({ widgetSize: v as Settings['widgetSize'] }),
     )

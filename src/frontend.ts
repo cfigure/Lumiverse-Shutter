@@ -1237,29 +1237,27 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!promptTextarea.disabled) generateBtn.disabled = !promptTextarea.value.trim()
     })
 
-    function setBusy(busy: boolean) {
-      rerunBtn.disabled = busy
-      promptTextarea.disabled = busy
-      cancelBtn.disabled = busy
-      generateBtn.disabled = busy || !promptTextarea.value.trim()
-      negTextarea.disabled = busy
-      rerunBtn.textContent = busy ? 'Regenerating\u2026' : 'Re-run parser'
-    }
+  rerunBtn.addEventListener('click', async () => {
+    closePromptModal()
+    setGeneratingState(true)
 
-    rerunBtn.addEventListener('click', async () => {
-      setBusy(true)
-      errorEl.style.display = 'none'
-      try {
-        const result = await callPreviewPrompt(chatId)
-        promptTextarea.value = result.prompt
-        negTextarea.value = result.negativePrompt
-      } catch (err: any) {
-        errorEl.textContent = parseErrorMessage(err.message)
-        errorEl.style.display = ''
-      } finally {
-        setBusy(false)
-      }
-    })
+    try {
+      const result = await callPreviewPrompt(chatId)
+
+      setGeneratingState(false)
+      openPromptPreviewModal(
+        result.prompt,
+        result.negativePrompt,
+        chatId,
+        messageId,
+        isAuto,
+        replace,
+      )
+    } catch (err: any) {
+      setGeneratingState(false)
+      showErrorModal(parseErrorMessage(err.message))
+    }
+  })
 
     generateBtn.addEventListener('click', async () => {
       const prompt = promptTextarea.value.trim()

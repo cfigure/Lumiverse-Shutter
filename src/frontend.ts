@@ -31,7 +31,7 @@ type GenerationResult = {
 
 // ── Constants ──
 
-const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72 }
+const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72, xlarge: 96 }
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
 const LONG_PRESS_MS = 500
@@ -375,7 +375,7 @@ export function setup(ctx: SpindleFrontendContext) {
     container.appendChild(sizeRow.row)
     rowWidgetSize = sizeRow.row
     selectWidgetSize = makeSelect(
-      [{ value: 'small', label: 'Small (44px)' }, { value: 'medium', label: 'Medium (56px)' }, { value: 'large', label: 'Large (72px)' }],
+      [{ value: 'small', label: 'Small (44px)' }, { value: 'medium', label: 'Medium (56px)' }, { value: 'large', label: 'Large (72px)' }, { value: 'xlarge', label: 'XL (96px)' }],
       s.widgetSize,
       (v) => updateSettings({ widgetSize: v as Settings['widgetSize'] }),
     )

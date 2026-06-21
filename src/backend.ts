@@ -7,8 +7,9 @@ type Settings = {
   toastOnInsert: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   forceGeneration: boolean
-  widgetSize: 'small' | 'medium' | 'large'
+  widgetSize: 'small' | 'medium' | 'large' | 'xlarge'
   widgetStyle: 'color' | 'mono'
+  iconTheme: 'aperture' | 'cherry_blossom' | 'cat_lotus'
   autoGenerate: 'off' | 'every' | 'interval' | 'random'
   autoGenerateInterval: number
   autoGenerateRandomMin: number
@@ -17,6 +18,7 @@ type Settings = {
   autoPreviewPrompt: boolean
   defaultAction: 'append' | 'replace'
   deleteConfirmation: 'never' | 'bulk_only' | 'always'
+  removeImageTagsFromContext: boolean
 }
 
 type FrontendMessage =
@@ -34,6 +36,7 @@ const DEFAULT_SETTINGS: Settings = {
   forceGeneration: true,
   widgetSize: 'small',
   widgetStyle: 'color',
+  iconTheme: 'aperture',
   autoGenerate: 'off',
   autoGenerateInterval: 3,
   autoGenerateRandomMin: 3,
@@ -42,15 +45,38 @@ const DEFAULT_SETTINGS: Settings = {
   autoPreviewPrompt: false,
   defaultAction: 'append',
   deleteConfirmation: 'bulk_only',
+  removeImageTagsFromContext: true,
 }
+
+// Current settings used by backend features that run outside a frontend action.
+let liveSettings: Settings = { ...DEFAULT_SETTINGS }
 
 // ── Validation ──
 
 function validateSettings(s: Settings): Settings {
   const out = { ...s }
-  out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval))
-  out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin))
-  out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax))
+
+  if (
+    out.iconTheme !== 'aperture' &&
+    out.iconTheme !== 'cherry_blossom' &&
+    out.iconTheme !== 'cat_lotus'
+  ) {
+    out.iconTheme = 'aperture'
+  }
+
+  out.autoGenerateInterval = Math.max(
+    1,
+    Math.round(out.autoGenerateInterval),
+  )
+  out.autoGenerateRandomMin = Math.max(
+    1,
+    Math.round(out.autoGenerateRandomMin),
+  )
+  out.autoGenerateRandomMax = Math.max(
+    out.autoGenerateRandomMin,
+    Math.round(out.autoGenerateRandomMax),
+  )
+
   return out
 }
 
@@ -58,7 +84,7 @@ function validateSettings(s: Settings): Settings {
 
 async function loadSettings(userId?: string): Promise<Settings> {
   const saved = await spindle.userStorage.getJson('settings.json', { fallback: {}, userId }) as Partial<Settings>
-  return { ...DEFAULT_SETTINGS, ...saved }
+  return validateSettings({ ...DEFAULT_SETTINGS, ...saved })
 }
 
 async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<Settings> {
@@ -68,11 +94,26 @@ async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<
   return merged
 }
 
-// ── Image manipulation ──
-// Keep in sync with Shutter-regex-scripts.json, which uses this same
-// pattern (unanchored, 'gi') to strip these tags from the LLM prompt.
 
-const SHUTTER_IMAGE_SOURCE = String.raw`\n{0,2}!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9-]+\)`
+void loadSettings()
+  .then(settings => {
+    liveSettings = settings
+  })
+  .catch(error => {
+    spindle.log.warn(
+      `[settings] Failed to load saved settings; using defaults: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  })
+
+// ── Image manipulation ──
+// The 'Remove Image Tags from Context' setting controls whether these tags are stripped from
+// the prompt natively via the interceptor below. Shutter-regex-scripts.json is
+// the legacy equivalent (same unanchored 'gi' pattern) for installs on a
+// Lumiverse old enough to lack the 'interceptor' permission; keep them in sync.
+
+const SHUTTER_IMAGE_SOURCE = String.raw`\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9-]+\)`
 const SHUTTER_IMAGE_RE = new RegExp(`${SHUTTER_IMAGE_SOURCE}$`, 'i')
 const SHUTTER_IMAGE_GLOBAL_RE = new RegExp(SHUTTER_IMAGE_SOURCE, 'gi')
 
@@ -86,6 +127,31 @@ function stripAllShutterImages(content: string): { content: string; count: numbe
   let count = 0
   const stripped = content.replace(SHUTTER_IMAGE_GLOBAL_RE, () => { count++; return '' })
   return { content: stripped, count }
+}
+
+// ── Image-tag context filtering (interceptor) ──
+//
+// Mirrors the legacy Shutter regex (target:prompt, ai_output): strip the
+// inline ![shutter](...) markdown from the assembled prompt so the model
+// never sees it, while the stored/displayed message keeps the image. Handles
+// both LlmMessageDTO content shapes — a plain string, or a parts array where
+// only text parts carry the markdown.
+
+type LlmMessage = import('lumiverse-spindle-types').LlmMessageDTO
+
+function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
+  const { content } = message
+  if (typeof content === 'string') {
+    return { ...message, content: content.replace(SHUTTER_IMAGE_GLOBAL_RE, '') }
+  }
+  return {
+    ...message,
+    content: content.map(part =>
+      part.type === 'text'
+        ? { ...part, text: part.text.replace(SHUTTER_IMAGE_GLOBAL_RE, '') }
+        : part,
+    ),
+  }
 }
 
 // ── Message resolution ──
@@ -123,12 +189,14 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 
       case 'request_settings': {
         const settings = await loadSettings(userId)
+        liveSettings = settings
         spindle.sendToFrontend({ type: 'settings', settings }, userId)
         break
       }
 
       case 'update_settings': {
         const settings = await saveSettings(payload.settings, userId)
+        liveSettings = settings
         spindle.sendToFrontend({ type: 'settings', settings }, userId)
         break
       }
@@ -251,5 +319,48 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
     spindle.log.error(`[${msgType}] ${err.message}`)
   }
 })
+
+// ── Image-tag context interceptor ──
+//
+// Registered once at startup. Reads the live setting on every generation so
+// toggling 'Remove Image Tags from Context' takes effect on the next
+// message with no re-registration (the host exposes a single interceptor slot
+// per extension and no unregister handle to the sandbox). When enabled, strip
+// Shutter's inline image tags; when disabled, pass the prompt through untouched.
+let imageTagInterceptorRegistered = false
+
+function ensureImageTagInterceptor(): void {
+  if (imageTagInterceptorRegistered || !spindle.permissions.has('interceptor')) return
+
+  spindle.registerInterceptor(async (messages: LlmMessage[]) => {
+    if (!liveSettings.removeImageTagsFromContext) return messages
+    return messages.map(stripShutterFromLlmMessage)
+  })
+
+  imageTagInterceptorRegistered = true
+  spindle.log.info('[context-tags] Image-tag interceptor registered.')
+}
+
+ensureImageTagInterceptor()
+
+spindle.permissions.onChanged(({ permission, granted }) => {
+  if (permission !== 'interceptor') return
+  if (granted) {
+    ensureImageTagInterceptor()
+  } else {
+    imageTagInterceptorRegistered = false
+    spindle.log.warn('[context-tags] "interceptor" permission revoked; Shutter image tags will remain in context.')
+  }
+})
+
+spindle.permissions.onDenied(({ permission, operation }) => {
+  if (permission !== 'interceptor' || operation !== 'registerInterceptor') return
+  imageTagInterceptorRegistered = false
+  spindle.log.warn('[context-tags] Image-tag interceptor registration was denied.')
+})
+
+if (!spindle.permissions.has('interceptor')) {
+  spindle.log.warn('[context-tags] "interceptor" permission not granted; Shutter image tags will remain in context.')
+}
 
 spindle.log.info('Shutter loaded!')

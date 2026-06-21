@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from 'lumiverse-spindle-types'
-import { ICON_INPUT_BAR, ICON_FLOAT_MONO, ICON_FLOAT_COLOR } from './icons'
+import { ICON_SETS, getIconSet, type ShutterIconId } from './icons'
 
 // ── Types ──
 
@@ -8,8 +8,9 @@ type Settings = {
   toastOnInsert: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   forceGeneration: boolean
-  widgetSize: 'small' | 'medium' | 'large'
+  widgetSize: 'small' | 'medium' | 'large' | 'xlarge'  
   widgetStyle: 'color' | 'mono'
+  iconTheme: ShutterIconId
   autoGenerate: 'off' | 'every' | 'interval' | 'random'
   autoGenerateInterval: number
   autoGenerateRandomMin: number
@@ -18,6 +19,7 @@ type Settings = {
   autoPreviewPrompt: boolean
   defaultAction: 'append' | 'replace'
   deleteConfirmation: 'never' | 'bulk_only' | 'always'
+  removeImageTagsFromContext: boolean
 }
 
 type GenerationResult = {
@@ -30,7 +32,7 @@ type GenerationResult = {
 
 // ── Constants ──
 
-const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72 }
+const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72, xlarge: 96 }
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
 const LONG_PRESS_MS = 500
@@ -65,6 +67,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let promptPreviewOpen = false
   const pendingLastMessageRequests = new Map<string, { resolve: (value: string | undefined) => void; timeout: ReturnType<typeof setTimeout> }>()
   let floatWidget: SpindleFloatWidgetHandle | null = null
+  let inputAction: any = null
 
   // ── Auto-generate state ──
 
@@ -106,6 +109,10 @@ export function setup(ctx: SpindleFrontendContext) {
     else if (next.showFloatWidget && prev && next.widgetSize !== prev.widgetSize) resizeFloatWidget()
 
     if (next.showFloatWidget && prev && next.widgetStyle !== prev.widgetStyle) updateFloatIcon()
+    if (!prev || next.iconTheme !== prev.iconTheme) {
+      if (next.showFloatWidget) updateFloatIcon()
+      updateInputActionIcon()
+    }
     if (
       !prev ||
       next.autoGenerate !== prev.autoGenerate ||
@@ -129,27 +136,47 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Permissions ──
 
+  let grantedPermissions = new Set<string>()
+
+  function applyGrantedPermissions(granted: string[]): void {
+    const hadInterceptor = grantedPermissions.has('interceptor')
+    grantedPermissions = new Set(granted)
+    const hasInterceptor = grantedPermissions.has('interceptor')
+
+    // Refresh the permission-sensitive row if its effective state changed.
+    if (hadInterceptor !== hasInterceptor && settings && handles) {
+      destroySettingsHandles()
+      mountSettings(settings)
+    }
+  }
+
   ctx.permissions.getGranted().then((granted: string[]) => {
-    const needed = ['chat_mutation', 'ui_panels']
+    applyGrantedPermissions(granted)
+    const needed = ['chat_mutation', 'ui_panels', 'interceptor']
     const missing = needed.filter(p => !granted.includes(p))
     if (missing.length === 0) return
     ctx.ui.showConfirm({
       title: 'Permissions Required',
-      message: `Shutter needs: ${missing.join(', ')}.`,
+      message: `Shutter needs: ${missing.join(', ')}. Interceptor access removes Shutter Markdown image tags from model prompts when this setting is enabled.`,
       variant: 'info',
       confirmLabel: 'Grant',
       cancelLabel: 'Not Now',
-    }).then(({ confirmed }: { confirmed: boolean }) => {
+    }).then(async ({ confirmed }: { confirmed: boolean }) => {
       if (!confirmed) return
-      ctx.permissions.request(missing).catch(() => {
+      try {
+        const updated = await ctx.permissions.request(missing, {
+          reason: 'Shutter uses chat and panel access for image insertion, and interceptor access to remove Shutter Markdown image tags from model prompts when enabled.',
+        })
+        applyGrantedPermissions(updated)
+      } catch {
         ctx.ui.showConfirm({
           title: 'Permissions Not Granted',
-          message: 'Shutter needs these permissions for its widget and inline-generation automation. You can grant them later from Lumiverse extension settings.',
+          message: 'Shutter can still run with limited functionality. Without Interceptor permission, Shutter Markdown image tags cannot be removed from model prompts.',
           variant: 'info',
           confirmLabel: 'OK',
           cancelLabel: 'Dismiss',
         })
-      })
+      }
     }).catch(() => { /* user dismissed the prompt */ })
   })
 
@@ -177,6 +204,8 @@ export function setup(ctx: SpindleFrontendContext) {
     .sh-setting-label { font-size: calc(13px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text); }
     .sh-setting-desc { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); margin-top: 2px; }
     .sh-setting-control { flex-shrink: 0; }
+    .sh-settings-divider { border-top: 1px solid var(--lumiverse-border); margin: 10px 0 8px; }
+    .sh-settings-note { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); line-height: 1.45; margin: 0 0 6px; }
     .sh-auto-section { margin-top: 10px; }
     .sh-range-row { display: flex; align-items: center; gap: 6px; }
     .sh-range-label { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); }
@@ -253,6 +282,7 @@ export function setup(ctx: SpindleFrontendContext) {
     showFloatWidget: any
     toastOnInsert: any
     forceGeneration: any
+    removeImageTagsFromContext: any
     autoGenerateInterval: any
     autoGenerateRandomMin: any
     autoGenerateRandomMax: any
@@ -262,7 +292,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let handles: SettingsHandles | null = null
   let settingsMounting = false
 
-  // Conditional rows that show/hide based on auto-generate mode
+  // Conditional rows that show/hide based on other settings
+  let rowWidgetSize: HTMLElement | null = null
+  let rowWidgetStyle: HTMLElement | null = null
   let rowInterval: HTMLElement | null = null
   let rowRandom: HTMLElement | null = null
   let rowAutoAfter: HTMLElement | null = null
@@ -271,6 +303,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // Native select element refs for syncing
   let selectWidgetSize: HTMLSelectElement | null = null
   let selectWidgetStyle: HTMLSelectElement | null = null
+  let selectIconTheme: HTMLSelectElement | null = null
   let selectAfterGenerate: HTMLSelectElement | null = null
   let selectAutoGenerate: HTMLSelectElement | null = null
   let selectAutoGenerateAfter: HTMLSelectElement | null = null
@@ -332,14 +365,18 @@ export function setup(ctx: SpindleFrontendContext) {
     container.appendChild(floatRow.row)
     const showFloatWidget = ctx.components.mountSwitch(floatRow.controlSlot, {
       checked: s.showFloatWidget,
-      onChange: (on: boolean) => updateSettings({ showFloatWidget: on }),
+      onChange: (on: boolean) => {
+        updateSettings({ showFloatWidget: on })
+        updateFloatingWidgetRowVisibility(on)
+      },
     })
 
     // Widget Size — native <select>
     const sizeRow = makeRow('Widget Size', 'Size of the floating button')
     container.appendChild(sizeRow.row)
+    rowWidgetSize = sizeRow.row
     selectWidgetSize = makeSelect(
-      [{ value: 'small', label: 'Small (44px)' }, { value: 'medium', label: 'Medium (56px)' }, { value: 'large', label: 'Large (72px)' }],
+      [{ value: 'small', label: 'Small' }, { value: 'medium', label: 'Medium' }, { value: 'large', label: 'Large' }, { value: 'xlarge', label: 'XL' }],
       s.widgetSize,
       (v) => updateSettings({ widgetSize: v as Settings['widgetSize'] }),
     )
@@ -348,12 +385,24 @@ export function setup(ctx: SpindleFrontendContext) {
     // Widget Style — native <select>
     const styleRow = makeRow('Widget Style', 'Icon style for the floating button')
     container.appendChild(styleRow.row)
+    rowWidgetStyle = styleRow.row
     selectWidgetStyle = makeSelect(
       [{ value: 'color', label: 'Colour' }, { value: 'mono', label: 'Monochrome' }],
       s.widgetStyle,
       (v) => updateSettings({ widgetStyle: v as Settings['widgetStyle'] }),
     )
     styleRow.controlSlot.appendChild(selectWidgetStyle)
+
+    // Icon Theme — native <select>
+    const iconRow = makeRow('Icon', 'Choose the icon used for the floating widget and input bar action')
+    container.appendChild(iconRow.row)
+    selectIconTheme = makeSelect(
+      (Object.entries(ICON_SETS) as [ShutterIconId, (typeof ICON_SETS)[ShutterIconId]][])
+        .map(([value, icon]) => ({ value, label: icon.label })),
+      s.iconTheme,
+      (v) => updateSettings({ iconTheme: v as ShutterIconId }),
+    )
+    iconRow.controlSlot.appendChild(selectIconTheme)
 
     // Toast on Insert
     const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message')
@@ -371,8 +420,29 @@ export function setup(ctx: SpindleFrontendContext) {
       onChange: (on: boolean) => updateSettings({ forceGeneration: on }),
     })
 
-    // After Generate — native <select>
-    const afterRow = makeRow('After Generate', 'What to do after a manual generation. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    const insertionDivider = document.createElement('div')
+    insertionDivider.className = 'sh-settings-divider'
+    container.appendChild(insertionDivider)
+
+    const insertionNote = document.createElement('div')
+    insertionNote.className = 'sh-settings-note'
+    insertionNote.textContent = 'The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
+    container.appendChild(insertionNote)
+
+    // Remove Image Tags from Context
+    const hasInterceptorPermission = grantedPermissions.has('interceptor')
+    const imageTagContextDescription =
+      'When enabled, Shutter removes inline-generated ![shutter](...) Markdown tags from prompts sent to the LLM.'
+    const imageTagContextRow = makeRow('Remove Image Tags from Context', imageTagContextDescription)
+    container.appendChild(imageTagContextRow.row)
+    const removeImageTagsFromContext = ctx.components.mountSwitch(imageTagContextRow.controlSlot, {
+      checked: s.removeImageTagsFromContext,
+      disabled: !hasInterceptorPermission,
+      onChange: (on: boolean) => updateSettings({ removeImageTagsFromContext: on }),
+    })
+
+    // After Generation — native <select>
+    const afterRow = makeRow('After Generation', 'What to do after a manual generation.')
     container.appendChild(afterRow.row)
     selectAfterGenerate = makeSelect(
       [{ value: 'ask_to_insert', label: 'Ask to insert' }, { value: 'auto_insert', label: 'Auto insert' }],
@@ -382,7 +452,7 @@ export function setup(ctx: SpindleFrontendContext) {
     afterRow.controlSlot.appendChild(selectAfterGenerate)
 
     // Default Action — native <select>
-    const defaultActionRow = makeRow('Default Widget Action', 'What pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    const defaultActionRow = makeRow('Default Widget Action', 'What pressing the widget or the input bar action does. Append inserts a new image; Replace swaps out the last Shutter image first.')
     container.appendChild(defaultActionRow.row)
     selectDefaultAction = makeSelect(
       [{ value: 'append', label: 'Append' }, { value: 'replace', label: 'Replace' }],
@@ -392,7 +462,7 @@ export function setup(ctx: SpindleFrontendContext) {
     defaultActionRow.controlSlot.appendChild(selectDefaultAction)
 
     // Delete Confirmation — native <select>
-    const deleteConfirmRow = makeRow('Remove Confirmation', 'When to show a confirmation before removing images. Skipped when ImageGen is set to Insert into Chat or Attach to Last Message.')
+    const deleteConfirmRow = makeRow('Remove Confirmation', 'When to show a confirmation before removing images.')
     container.appendChild(deleteConfirmRow.row)
     selectDeleteConfirmation = makeSelect(
       [{ value: 'never', label: 'Never' }, { value: 'bulk_only', label: 'Bulk only' }, { value: 'always', label: 'Always' }],
@@ -488,18 +558,25 @@ export function setup(ctx: SpindleFrontendContext) {
     settingsRoot.appendChild(container)
 
     // Set initial visibility of conditional rows
+    updateFloatingWidgetRowVisibility(s.showFloatWidget)
     updateAutoRowVisibility(s.autoGenerate)
 
     handles = {
       showFloatWidget,
       toastOnInsert,
       forceGeneration,
+      removeImageTagsFromContext,
       autoGenerateInterval,
       autoGenerateRandomMin,
       autoGenerateRandomMax,
       autoPreviewPrompt,
       autoSection,
     }
+  }
+
+  function updateFloatingWidgetRowVisibility(show: boolean) {
+    if (rowWidgetSize) rowWidgetSize.style.display = show ? '' : 'none'
+    if (rowWidgetStyle) rowWidgetStyle.style.display = show ? '' : 'none'
   }
 
   function updateAutoRowVisibility(mode: Settings['autoGenerate']) {
@@ -518,18 +595,22 @@ export function setup(ctx: SpindleFrontendContext) {
     handles.showFloatWidget.destroy()
     handles.toastOnInsert.destroy()
     handles.forceGeneration.destroy()
+    handles.removeImageTagsFromContext.destroy()
     handles.autoGenerateInterval.destroy()
     handles.autoGenerateRandomMin.destroy()
     handles.autoGenerateRandomMax.destroy()
     handles.autoPreviewPrompt.destroy()
     handles.autoSection.destroy()
     handles = null
+    rowWidgetSize = null
+    rowWidgetStyle = null
     rowInterval = null
     rowRandom = null
     rowAutoAfter = null
     rowAutoPreview = null
     selectWidgetSize = null
     selectWidgetStyle = null
+    selectIconTheme = null
     selectAfterGenerate = null
     selectAutoGenerate = null
     selectAutoGenerateAfter = null
@@ -552,12 +633,14 @@ export function setup(ctx: SpindleFrontendContext) {
     // Native selects — set .value directly
     if (selectWidgetSize) selectWidgetSize.value = s.widgetSize
     if (selectWidgetStyle) selectWidgetStyle.value = s.widgetStyle
+    if (selectIconTheme) selectIconTheme.value = s.iconTheme
     if (selectAfterGenerate) selectAfterGenerate.value = s.afterGenerate
     if (selectAutoGenerate) selectAutoGenerate.value = s.autoGenerate
     if (selectAutoGenerateAfter) selectAutoGenerateAfter.value = s.autoGenerateAfter
     if (selectDefaultAction) selectDefaultAction.value = s.defaultAction
     if (selectDeleteConfirmation) selectDeleteConfirmation.value = s.deleteConfirmation
 
+    updateFloatingWidgetRowVisibility(s.showFloatWidget)
     updateAutoRowVisibility(s.autoGenerate)
   }
 
@@ -830,7 +913,8 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const btn = document.createElement('button')
     btn.className = 'sh-float-btn'
-    btn.innerHTML = settings.widgetStyle === 'mono' ? ICON_FLOAT_MONO : ICON_FLOAT_COLOR
+    const icon = getIconSet(settings.iconTheme)
+    btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
 
     let pointerStart: { x: number; y: number; time: number } | null = null
     let longPressTimer: ReturnType<typeof setTimeout> | null = null
@@ -910,18 +994,27 @@ export function setup(ctx: SpindleFrontendContext) {
     const svg = floatWidget.root.querySelector('svg')
     if (svg) {
       const btn = svg.parentElement
-      if (btn) btn.innerHTML = settings.widgetStyle === 'mono' ? ICON_FLOAT_MONO : ICON_FLOAT_COLOR
+      if (btn) {
+        const icon = getIconSet(settings.iconTheme)
+        btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
+      }
     }
   }
 
   // ── Input bar action ──
 
-  const inputAction = ctx.ui.registerInputBarAction({
-    id: 'shutter-generate',
-    label: 'Generate Image',
-    iconSvg: ICON_INPUT_BAR,
-  })
-  inputAction.onClick(() => triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace'))
+  function updateInputActionIcon() {
+    const icon = getIconSet(settings?.iconTheme ?? 'aperture')
+    inputAction?.destroy()
+    inputAction = ctx.ui.registerInputBarAction({
+      id: 'shutter-generate',
+      label: 'Generate Image',
+      iconSvg: icon.inputBar,
+    })
+    inputAction.onClick(() => triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace'))
+  }
+
+  updateInputActionIcon()
 
   // ── Auto-generate: listen for AI messages ──
   // Frontend event listening rides the user's own WebSocket and is ungated.
@@ -1144,29 +1237,27 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!promptTextarea.disabled) generateBtn.disabled = !promptTextarea.value.trim()
     })
 
-    function setBusy(busy: boolean) {
-      rerunBtn.disabled = busy
-      promptTextarea.disabled = busy
-      cancelBtn.disabled = busy
-      generateBtn.disabled = busy || !promptTextarea.value.trim()
-      negTextarea.disabled = busy
-      rerunBtn.textContent = busy ? 'Regenerating\u2026' : 'Re-run parser'
-    }
-
     rerunBtn.addEventListener('click', async () => {
-      setBusy(true)
-      errorEl.style.display = 'none'
-      try {
-        const result = await callPreviewPrompt(chatId)
-        promptTextarea.value = result.prompt
-        negTextarea.value = result.negativePrompt
-      } catch (err: any) {
-        errorEl.textContent = parseErrorMessage(err.message)
-        errorEl.style.display = ''
-      } finally {
-        setBusy(false)
-      }
-    })
+    closePromptModal()
+    setGeneratingState(true)
+
+    try {
+      const result = await callPreviewPrompt(chatId)
+
+      setGeneratingState(false)
+      openPromptPreviewModal(
+        result.prompt,
+        result.negativePrompt,
+        chatId,
+        messageId,
+        isAuto,
+        replace,
+      )
+    } catch (err: any) {
+      setGeneratingState(false)
+      showErrorModal(parseErrorMessage(err.message))
+    }
+  })
 
     generateBtn.addEventListener('click', async () => {
       const prompt = promptTextarea.value.trim()
@@ -1248,7 +1339,7 @@ export function setup(ctx: SpindleFrontendContext) {
     unsubBackend()
     unsubCharMsg()
     unsubChatSwitched()
-    inputAction.destroy()
+    inputAction?.destroy()
     destroyFloatWidget()
     destroySettingsHandles()
     dismissLightbox()

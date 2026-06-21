@@ -7,7 +7,7 @@ type Settings = {
   toastOnInsert: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   forceGeneration: boolean
-  widgetSize: 'small' | 'medium' | 'large'
+  widgetSize: 'small' | 'medium' | 'large' | 'xlarge'
   widgetStyle: 'color' | 'mono'
   iconTheme: 'aperture' | 'cherry_blossom' | 'cat_lotus'
   autoGenerate: 'off' | 'every' | 'interval' | 'random'

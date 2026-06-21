@@ -8,8 +8,7 @@ type Settings = {
   toastOnInsert: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   forceGeneration: boolean
-  widgetSize: 'small' | 'medium' | 'large'
-  widgetStyle: 'color' | 'mono'
+  widgetSize: 'small' | 'medium' | 'large' | 'xlarge'  widgetStyle: 'color' | 'mono'
   iconTheme: ShutterIconId
   autoGenerate: 'off' | 'every' | 'interval' | 'random'
   autoGenerateInterval: number

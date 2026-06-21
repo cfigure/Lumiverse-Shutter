@@ -17,7 +17,7 @@ Long-press or right-click the floating widget to open the advanced menu for the 
 
 Images inserted by Shutter are tagged `![shutter]` in the message markdown so they can be identified. By default these tags are stripped from the prompt before it is sent to the model — see **Remove Image Tags from Context** below. The image remains visible in chat through Lumiverse's viewer, but Shutter never sends the image itself as multimodal context.
 
-> **Legacy:** older Shutter versions shipped a [regex](Shutter-regex-scripts.json) script to strip these tags manually. That's now built in and the script is redundant on Lumiverse 1.0.0+. It's kept in the repo only for installs on a Lumiverse old enough to lack the `interceptor` permission; if you imported it previously, you can delete it.
+> **Legacy:** older Shutter versions shipped a [regex](Shutter-regex-scripts.json) script to strip these tags manually. That's now built in and the script is redundant on Shutter 1.0.5+. It's kept in the repo only for archive purposes; if you imported it previously, you can delete it.
 
 ### Auto Generate
 
@@ -31,28 +31,31 @@ There are three auto-generate modes:
 
 The counter resets after any generation, whether manual or automatic. Auto-generate has its own **After Auto Generate** setting so you can control its behaviour independently from manual triggers. Error modals are suppressed for auto-generated images to avoid interrupting the conversation flow.
 
-## Settings
+## Settings Overview
 
-- **Floating Widget** — show a quick-access generate button on screen
-- **Widget Size** — size of the floating button (Small 44px / Medium 56px / Large 72px)
-- **Widget Style** — icon style for the floating button (Colour / Monochrome)
-- **Icon** — choose the complete icon theme used by both the floating widget and input-bar action (Aperture / Cherry Blossom / Kitty Lotus)
-- **Toast on Insert** — show a notification when an image is inserted into a message
-- **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold.
-- **Remove Image Tags from Context** — controls only the `![shutter](...)` Markdown text. When on (the default), those tags are removed from prompts sent to the LLM while the image remains visible in chat. When off, the tags remain in the prompt. Shutter does not send the image itself as multimodal context in either mode.
-- **After Generate** — what to do after a manual generation. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (ask to insert / auto insert)
-- **Default Widget Action** — what pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. If no image is inserted, Replace acts as normal Append. Skipped when ImageGen is set to "Insert into Chat" or "Attach to Last Message" (append / replace)
-- **Delete Confirmation** — when to ask before removing images via the advanced menu (never / bulk only / always)
+- **Floating Widget** — Show a quick-access generate widget on screen
+- **Widget Size** — Size of the floating button (Small / Medium / Large / XL)
+- **Widget Style** — Icon style for the floating button (Colour / Monochrome)
+- **Icon** — Choose the icon used for the floating widget and input bar action (Aperture / Cherry Blossom / Kitty Lotus)
+- **Toast on Insert** — Show a notification when an image is inserted into a message
+- **Force Generation** — always generate regardless of scene changes, matching Lumiverse’s native **Force Generate** option in the ImageGen panel. When off, generation respects the scene change threshold. 
+
+# The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.
+
+- **Remove Image Tags from Context** — Controls only the `![shutter](...)` Markdown text. When on (the default), those tags are removed from prompts sent to the LLM while the image remains visible in chat. When off, the tags remain in the prompt. Shutter does not send the image itself as multimodal context in either mode.
+- **After Generation** — What to do after a manual generation (ask to insert / auto insert)
+- **Default Widget Action** — What pressing the widget or the input bar action does. Append inserts a new image, Replace swaps out the last Shutter image first. If no image is inserted, Replace acts as normal Append (append / replace)
+- **Remove Confirmation** — When to ask before removing images via the advanced menu (never / bulk only / always)
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings, Shutter shows its own prompt preview modal before manual generations. This mirrors the native preview flow because extensions cannot mount the native React prompt-preview component directly. You can review and edit the resolved prompt, re-run the parser, or generate directly.
 
 ### Auto Generate Settings
 
 - **Mode** — Off / Every message / Every X messages / Random interval
-- **Interval** — number of AI messages between generations (when mode is "Every X messages")
-- **Random Range** — min and max AI messages between generations (when mode is "Random interval")
-- **After Auto Generate** — what to do after an automatic generation (auto insert / ask to insert)
-- **Preview Prompt on Auto** — show the prompt preview modal for auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.
+- **Interval** — Number of AI messages between generations (when mode is "Every X messages")
+- **Random Range** — Min and max AI messages between generations (when mode is "Random interval")
+- **After Auto Generate** — What to do after an automatic generation (auto insert / ask to insert)
+- **Preview Prompt on Auto** — Show the prompt preview modal for auto-generated images. Requires "Preview Prompt Before Generating" to be enabled in native ImageGen settings.
 
 When "Preview Prompt Before Generating" is enabled in native ImageGen settings and **Preview Prompt on Auto** is turned on, Shutter will also show the prompt preview modal for auto-generated images.
 
@@ -69,7 +72,7 @@ If you're using Minimal chat layout, replace `BubbleMessage` with `MinimalMessag
 
 ## Compatibility
 
-Shutter requires Lumiverse 1.0.0 or newer.
+Shutter 1.0.5 requires Lumiverse 1.0.4 or newer.
 
 ### Compatibility notes
 

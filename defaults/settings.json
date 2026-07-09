@@ -2,7 +2,6 @@
   "showFloatWidget": false,
   "toastOnInsert": true,
   "afterGenerate": "ask_to_insert",
-  "forceGeneration": true,
   "widgetSize": "small",
   "widgetStyle": "color",
   "iconTheme": "aperture",
@@ -14,5 +13,9 @@
   "autoPreviewPrompt": false,
   "defaultAction": "append",
   "deleteConfirmation": "bulk_only",
-  "removeImageTagsFromContext": true
+  "removeImageTagsFromContext": true,
+  "showPromptInLightbox": false,
+  "shutterImageLayout": "off",
+  "shutterImageWidth": 50,
+  "shutterImageAlign": "center"
 }

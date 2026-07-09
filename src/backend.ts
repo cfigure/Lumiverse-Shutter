@@ -1,25 +1,8 @@
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
-// ── Types ──
+import { DEFAULT_SETTINGS, validateSettings, type Settings } from './settings'
 
-type Settings = {
-  showFloatWidget: boolean
-  toastOnInsert: boolean
-  afterGenerate: 'ask_to_insert' | 'auto_insert'
-  forceGeneration: boolean
-  widgetSize: 'small' | 'medium' | 'large' | 'xlarge'
-  widgetStyle: 'color' | 'mono'
-  iconTheme: 'aperture' | 'cherry_blossom' | 'cat_lotus'
-  autoGenerate: 'off' | 'every' | 'interval' | 'random'
-  autoGenerateInterval: number
-  autoGenerateRandomMin: number
-  autoGenerateRandomMax: number
-  autoGenerateAfter: 'auto_insert' | 'ask_to_insert'
-  autoPreviewPrompt: boolean
-  defaultAction: 'append' | 'replace'
-  deleteConfirmation: 'never' | 'bulk_only' | 'always'
-  removeImageTagsFromContext: boolean
-}
+// ── Types ──
 
 type FrontendMessage =
   | { type: 'request_settings' }
@@ -28,57 +11,11 @@ type FrontendMessage =
   | { type: 'resolve_last_message_id'; requestId: string; chatId: string }
   | { type: 'delete_image'; messageId: string; chatId: string }
   | { type: 'delete_all_images'; messageId: string; chatId: string }
-
-const DEFAULT_SETTINGS: Settings = {
-  showFloatWidget: false,
-  toastOnInsert: true,
-  afterGenerate: 'ask_to_insert',
-  forceGeneration: true,
-  widgetSize: 'small',
-  widgetStyle: 'color',
-  iconTheme: 'aperture',
-  autoGenerate: 'off',
-  autoGenerateInterval: 3,
-  autoGenerateRandomMin: 3,
-  autoGenerateRandomMax: 7,
-  autoGenerateAfter: 'auto_insert',
-  autoPreviewPrompt: false,
-  defaultAction: 'append',
-  deleteConfirmation: 'bulk_only',
-  removeImageTagsFromContext: true,
-}
+  | { type: 'show_toast'; level: 'info' | 'success' | 'warning' | 'error'; message: string }
+  | { type: 'resolve_shutter_tag'; requestId: string; chatId: string; messageId: string; index: number }
 
 // Current settings used by backend features that run outside a frontend action.
 let liveSettings: Settings = { ...DEFAULT_SETTINGS }
-
-// ── Validation ──
-
-function validateSettings(s: Settings): Settings {
-  const out = { ...s }
-
-  if (
-    out.iconTheme !== 'aperture' &&
-    out.iconTheme !== 'cherry_blossom' &&
-    out.iconTheme !== 'cat_lotus'
-  ) {
-    out.iconTheme = 'aperture'
-  }
-
-  out.autoGenerateInterval = Math.max(
-    1,
-    Math.round(out.autoGenerateInterval),
-  )
-  out.autoGenerateRandomMin = Math.max(
-    1,
-    Math.round(out.autoGenerateRandomMin),
-  )
-  out.autoGenerateRandomMax = Math.max(
-    out.autoGenerateRandomMin,
-    Math.round(out.autoGenerateRandomMax),
-  )
-
-  return out
-}
 
 // ── Storage ──
 
@@ -93,7 +30,6 @@ async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<
   await spindle.userStorage.setJson('settings.json', merged, { indent: 2, userId })
   return merged
 }
-
 
 void loadSettings()
   .then(settings => {
@@ -163,7 +99,6 @@ function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
 // (destructive, invisible). Literal-last's worst case is an image landing
 // on the user's own queued message (additive, visible, reversible).
 // Matches native ImageGen's attach-to-last (messages[length - 1]).
-// Full rationale: CHANGES.md, "Message targeting".
 type ShutterMessage = { id: string; content: string; role: string; index_in_chat: number }
 
 function orderedMessages<T extends ShutterMessage>(messages: T[]): T[] {
@@ -202,6 +137,62 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
       }
 
 
+      case 'show_toast': {
+        // Toasts are backend-only in the Spindle API (free tier, no
+        // permission), so the frontend routes its notifications through
+        // here — same pattern as insert confirmations. `userId` targets the
+        // sender: operator-scoped installs (Lumiverse's default for GitHub
+        // installs) broadcast to ALL users when it is omitted; user-scoped
+        // installs ignore it. Same option on every toast in this handler.
+        spindle.toast[payload.level](payload.message, { userId })
+        break
+      }
+
+      case 'resolve_shutter_tag': {
+        // Resolve the authoritative image identity for a Shutter image from
+        // the message markdown itself. Rendered/lightbox srcs can't be
+        // trusted: host builds may rewrite them to separate display records
+        // and thumbnail tiers, but the ![shutter](...) tag always carries
+        // the generation image ID and the original route (which serves
+        // unmodified provider bytes for metadata parsing). messageId
+        // supports '__last__' (same semantics as the mutation handlers) and
+        // a negative index counts from the end (-1 = newest tag) — used by
+        // the widget menu's View Prompt, which targets the last Shutter
+        // image of the last message without needing the rendered DOM.
+        let imageId: string | null = null
+        let path: string | null = null
+        try {
+          if (spindle.permissions.has('chat_mutation')) {
+            const messages = await spindle.chat.getMessages(payload.chatId)
+            const { target: message } = resolveTarget(messages, payload.messageId)
+            if (message && typeof message.content === 'string') {
+              const tagRe = new RegExp(String.raw`!\[shutter\]\((/api/v1/(?:images|image-gen/results)/([a-f0-9-]+))\)`, 'gi')
+              const tags: Array<{ path: string; imageId: string }> = []
+              let m: RegExpExecArray | null
+              while ((m = tagRe.exec(message.content)) !== null) {
+                tags.push({ path: m[1], imageId: m[2] })
+              }
+              const tag = payload.index < 0
+                ? (tags[tags.length + payload.index] ?? null)
+                : (tags[payload.index] ?? tags[0] ?? null)
+              if (tag) {
+                imageId = tag.imageId
+                path = tag.path
+              }
+            }
+          }
+        } catch (err) {
+          spindle.log.warn(`[lightbox] resolve_shutter_tag failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        spindle.sendToFrontend({
+          type: 'shutter_tag',
+          requestId: payload.requestId,
+          imageId,
+          path,
+        }, userId)
+        break
+      }
+
       case 'resolve_last_message_id': {
         if (!spindle.permissions.has('chat_mutation')) {
           spindle.sendToFrontend({
@@ -230,14 +221,14 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 
       case 'insert_into_message': {
         if (!spindle.permissions.has('chat_mutation')) {
-          spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.')
+          spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId })
           return
         }
 
         const messages = await spindle.chat.getMessages(payload.chatId)
 
         const { target, error } = resolveTarget(messages, payload.messageId)
-        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
+        if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
 
         const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
         if (target.content.includes(imageUrl)) {
@@ -259,25 +250,25 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 
         const settings = await loadSettings(userId)
         if (settings.toastOnInsert) {
-          spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.')
+          spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId })
         }
         break
       }
 
       case 'delete_image': {
         if (!spindle.permissions.has('chat_mutation')) {
-          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.')
+          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId })
           return
         }
 
         const messages = await spindle.chat.getMessages(payload.chatId)
 
         const { target, error } = resolveTarget(messages, payload.messageId)
-        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
+        if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
 
         const stripped = stripLastShutterImage(target.content)
         if (!stripped.found) {
-          spindle.toast.warning('No Shutter image found in message.')
+          spindle.toast.warning('No Shutter image found in message.', { userId })
           return
         }
 
@@ -285,24 +276,24 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           content: stripped.content,
         })
 
-        spindle.toast.success('Image removed from message.')
+        spindle.toast.success('Image removed from message.', { userId })
         break
       }
 
       case 'delete_all_images': {
         if (!spindle.permissions.has('chat_mutation')) {
-          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.')
+          spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId })
           return
         }
 
         const messages = await spindle.chat.getMessages(payload.chatId)
 
         const { target, error } = resolveTarget(messages, payload.messageId)
-        if (!target) { spindle.toast.error(error || 'Message not found.'); return }
+        if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
 
         const stripped = stripAllShutterImages(target.content)
         if (stripped.count === 0) {
-          spindle.toast.warning('No Shutter images found in message.')
+          spindle.toast.warning('No Shutter images found in message.', { userId })
           return
         }
 
@@ -310,7 +301,7 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           content: stripped.content,
         })
 
-        spindle.toast.success(`Removed ${stripped.count} image${stripped.count > 1 ? 's' : ''} from message.`)
+        spindle.toast.success(`Removed ${stripped.count} image${stripped.count > 1 ? 's' : ''} from message.`, { userId })
         break
       }
     }

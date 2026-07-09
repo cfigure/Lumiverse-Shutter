@@ -213,7 +213,7 @@ export function createSettingsPanel(deps: {
     // Inline Shutter image layout — native <select> + typeable percentage input
     const imageLayoutRow = makeRow(
       'Shutter Image Layout',
-      'Optionally resize and align inline Shutter Markdown images. Leave off if you use custom CSS.',
+      'Optionally resize and align inline Shutter Markdown images. Leave off if you already style Shutter images with custom CSS.',
     )
     container.appendChild(imageLayoutRow.row)
     selectShutterImageLayout = makeSelect(

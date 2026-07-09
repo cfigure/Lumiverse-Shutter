@@ -14,12 +14,5 @@
   ],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
-  "minimum_lumiverse_version": "1.0.4",
-  "storage_seed_files": [
-    {
-      "from": "defaults/settings.json",
-      "to": "settings.json",
-      "overwrite": false
-    }
-  ]
+  "minimum_lumiverse_version": "1.0.4"
 }

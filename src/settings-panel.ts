@@ -138,7 +138,7 @@ export function createSettingsPanel(deps: {
     // ── General settings ──
 
     // Floating Widget toggle
-    const floatRow = makeRow('Floating Widget', 'Show a quick-access generate widget on screen')
+    const floatRow = makeRow('Floating Widget', 'Show a quick-access generate widget on screen.')
     container.appendChild(floatRow.row)
     const showFloatWidget = ctx.components.mountSwitch(floatRow.controlSlot, {
       checked: s.showFloatWidget,
@@ -149,7 +149,7 @@ export function createSettingsPanel(deps: {
     })
 
     // Widget Size — native <select>
-    const sizeRow = makeRow('Widget Size', 'Size of the floating button')
+    const sizeRow = makeRow('Widget Size', 'Size of the floating button.')
     container.appendChild(sizeRow.row)
     rowWidgetSize = sizeRow.row
     selectWidgetSize = makeSelect(
@@ -160,7 +160,7 @@ export function createSettingsPanel(deps: {
     sizeRow.controlSlot.appendChild(selectWidgetSize)
 
     // Widget Style — native <select>
-    const styleRow = makeRow('Widget Style', 'Icon style for the floating button')
+    const styleRow = makeRow('Widget Style', 'Icon style for the floating button.')
     container.appendChild(styleRow.row)
     rowWidgetStyle = styleRow.row
     selectWidgetStyle = makeSelect(
@@ -171,7 +171,7 @@ export function createSettingsPanel(deps: {
     styleRow.controlSlot.appendChild(selectWidgetStyle)
 
     // Icon Theme — native <select>
-    const iconRow = makeRow('Icon', 'Choose the icon used for the floating widget and input bar action')
+    const iconRow = makeRow('Icon', 'Choose the icon used for the floating widget and input bar action.')
     container.appendChild(iconRow.row)
     selectIconTheme = makeSelect(
       (Object.entries(ICON_SETS) as [ShutterIconId, (typeof ICON_SETS)[ShutterIconId]][])
@@ -182,7 +182,7 @@ export function createSettingsPanel(deps: {
     iconRow.controlSlot.appendChild(selectIconTheme)
 
     // Toast on Insert
-    const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message')
+    const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.')
     container.appendChild(toastRow.row)
     const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
       checked: s.toastOnInsert,
@@ -227,7 +227,7 @@ export function createSettingsPanel(deps: {
     )
     imageLayoutRow.controlSlot.appendChild(selectShutterImageLayout)
 
-    const imageWidthRow = makeRow('Image Width', 'Width of inline Shutter images, as a percentage of the message area')
+    const imageWidthRow = makeRow('Image Width', 'Width of inline Shutter images, as a percentage of the message area.')
     container.appendChild(imageWidthRow.row)
     rowShutterImageWidth = imageWidthRow.row
     const widthControl = document.createElement('div')
@@ -240,7 +240,7 @@ export function createSettingsPanel(deps: {
     widthControl.appendChild(widthSuffix)
     imageWidthRow.controlSlot.appendChild(widthControl)
 
-    const imageAlignRow = makeRow('Image Alignment', 'Alignment for inline Shutter images when width is below 100%')
+    const imageAlignRow = makeRow('Image Alignment', 'Alignment for inline Shutter images when width is below 100%.')
     container.appendChild(imageAlignRow.row)
     rowShutterImageAlign = imageAlignRow.row
     selectShutterImageAlign = makeSelect(
@@ -319,7 +319,7 @@ export function createSettingsPanel(deps: {
     autoModeRow.controlSlot.appendChild(selectAutoGenerate)
 
     // Interval row — shared number stepper
-    const intervalRow = makeRow('Interval', 'Generate every X AI messages')
+    const intervalRow = makeRow('Interval', 'Generate every X AI messages.')
     autoSection.body.appendChild(intervalRow.row)
     rowInterval = intervalRow.row
     const autoGenerateInterval = ctx.components.mountNumberStepper(intervalRow.controlSlot, {
@@ -331,7 +331,7 @@ export function createSettingsPanel(deps: {
     })
 
     // Random range row — shared number steppers
-    const randomRow = makeRow('Random Range', 'Generate randomly between X and Y AI messages')
+    const randomRow = makeRow('Random Range', 'Generate randomly between X and Y AI messages.')
     autoSection.body.appendChild(randomRow.row)
     rowRandom = randomRow.row
     const rangeContainer = document.createElement('div')
@@ -358,7 +358,7 @@ export function createSettingsPanel(deps: {
     })
 
     // After Auto Generate — native <select>
-    const autoAfterRow = makeRow('After Auto Generate', 'What to do after an automatic generation')
+    const autoAfterRow = makeRow('After Auto Generate', 'What to do after an automatic generation.')
     autoSection.body.appendChild(autoAfterRow.row)
     rowAutoAfter = autoAfterRow.row
     selectAutoGenerateAfter = makeSelect(

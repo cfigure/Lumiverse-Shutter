@@ -29,6 +29,8 @@ export function createSettingsPanel(deps: {
   type SettingsHandles = {
     showFloatWidget: any
     toastOnInsert: any
+    generationHistory: any
+    swipeToRegenerate: any
     removeImageTagsFromContext: any
     showPromptInLightbox: any
     autoGenerateInterval: any
@@ -43,6 +45,7 @@ export function createSettingsPanel(deps: {
   // Conditional rows that show/hide based on other settings
   let rowWidgetSize: HTMLElement | null = null
   let rowWidgetStyle: HTMLElement | null = null
+  let rowSwipeToRegenerate: HTMLElement | null = null
   let rowInterval: HTMLElement | null = null
   let rowRandom: HTMLElement | null = null
   let rowAutoAfter: HTMLElement | null = null
@@ -180,6 +183,26 @@ export function createSettingsPanel(deps: {
       (v) => deps.updateSettings({ iconTheme: v as ShutterIconId }),
     )
     iconRow.controlSlot.appendChild(selectIconTheme)
+
+    // Generation History (parent)
+    const historyRow = makeRow('Generation History', 'Browse every version generated with Regenerate Image in the result modal. Insert or regenerate any of them — a new generation or Rebuild Prompt starts a fresh set.')
+    container.appendChild(historyRow.row)
+    const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
+      checked: s.generationHistory,
+      onChange: (on: boolean) => {
+        deps.updateSettings({ generationHistory: on })
+        updateGenerationHistoryRowVisibility(on)
+      },
+    })
+
+    // Swipe to Regenerate (child — hidden while Generation History is off)
+    const swipeRegenRow = makeRow('Swipe to Regenerate', 'Swipe past the last image (mobile), press the right arrow key (desktop), or tap the chevron to generate another with the same prompt.')
+    container.appendChild(swipeRegenRow.row)
+    rowSwipeToRegenerate = swipeRegenRow.row
+    const swipeToRegenerate = ctx.components.mountSwitch(swipeRegenRow.controlSlot, {
+      checked: s.swipeToRegenerate,
+      onChange: (on: boolean) => deps.updateSettings({ swipeToRegenerate: on }),
+    })
 
     // Toast on Insert
     const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.')
@@ -383,10 +406,13 @@ export function createSettingsPanel(deps: {
     updateFloatingWidgetRowVisibility(s.showFloatWidget)
     updateShutterImageLayoutVisibility(s.shutterImageLayout)
     updateAutoRowVisibility(s.autoGenerate)
+    updateGenerationHistoryRowVisibility(s.generationHistory)
 
     handles = {
       showFloatWidget,
       toastOnInsert,
+      generationHistory,
+      swipeToRegenerate,
       removeImageTagsFromContext,
       showPromptInLightbox,
       autoGenerateInterval,
@@ -400,6 +426,10 @@ export function createSettingsPanel(deps: {
   function updateFloatingWidgetRowVisibility(show: boolean) {
     if (rowWidgetSize) rowWidgetSize.style.display = show ? '' : 'none'
     if (rowWidgetStyle) rowWidgetStyle.style.display = show ? '' : 'none'
+  }
+
+  function updateGenerationHistoryRowVisibility(show: boolean) {
+    if (rowSwipeToRegenerate) rowSwipeToRegenerate.style.display = show ? '' : 'none'
   }
 
   function updateShutterImageLayoutVisibility(mode: Settings['shutterImageLayout']) {
@@ -423,6 +453,8 @@ export function createSettingsPanel(deps: {
     if (!handles) return
     handles.showFloatWidget.destroy()
     handles.toastOnInsert.destroy()
+    handles.generationHistory.destroy()
+    handles.swipeToRegenerate.destroy()
     handles.removeImageTagsFromContext.destroy()
     handles.showPromptInLightbox.destroy()
     handles.autoGenerateInterval.destroy()

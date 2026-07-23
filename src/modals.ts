@@ -99,9 +99,17 @@ export function createModals(deps: {
   let continueGenSession = false
 
   function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
+    // Feature tiers (both default off): history enables the pill + session
+    // retention; swipe (child setting) additionally lets stepping past the
+    // end spawn a new generation. With history off the modal is exactly the
+    // pre-1.0.7 flow — single image, no pill, no gesture/keyboard capture.
+    const settings = deps.getSettings()
+    const historyEnabled = settings?.generationHistory === true
+    const swipeEnabled = historyEnabled && settings?.swipeToRegenerate === true
+
     // Continue the session only when re-entered via Regenerate Image;
     // every other arrival is a new prompt cycle and starts clean.
-    if (!continueGenSession) genSession = []
+    if (!historyEnabled || !continueGenSession) genSession = []
     continueGenSession = false
 
     const history = genSession
@@ -151,7 +159,7 @@ export function createModals(deps: {
     histPill.appendChild(navPrev)
     histPill.appendChild(histCount)
     histPill.appendChild(navNext)
-    previewWrap.appendChild(histPill)
+    if (historyEnabled) previewWrap.appendChild(histPill)
     container.appendChild(previewWrap)
 
     function renderHistory() {
@@ -162,14 +170,23 @@ export function createModals(deps: {
         const img = activeLightbox.overlay.querySelector('img')
         if (img) img.src = entry.imageUrl
       }
+      // History-only tier: pill appears once there's something to browse.
+      // Swipe tier: always visible (native 1/1 semantics — the right chevron
+      // past the end spawns a new generation, so the pill is the affordance).
+      histPill.style.display = (swipeEnabled || history.length > 1) ? '' : 'none'
       navPrev.disabled = idx === 0
       const atEnd = idx === history.length - 1
-      // Past-the-end spawns a new generation (native swipe semantics), so the
-      // right chevron stays live at the end — disabled only if the prompt
-      // needed to regenerate was never returned.
-      const canRegen = !!history[history.length - 1]!.prompt.trim()
-      navNext.disabled = atEnd && !canRegen
-      navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
+      if (swipeEnabled) {
+        // Past-the-end spawns a new generation (native swipe semantics), so
+        // the right chevron stays live at the end — disabled only if the
+        // prompt needed to regenerate was never returned.
+        const canRegen = !!history[history.length - 1]!.prompt.trim()
+        navNext.disabled = atEnd && !canRegen
+        navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
+      } else {
+        navNext.disabled = atEnd
+        navNext.title = 'Next generation'
+      }
       histCount.textContent = `${idx + 1} / ${history.length}`
     }
 
@@ -218,7 +235,9 @@ export function createModals(deps: {
         // Stepping past the last entry = "give me another one" — mirrors
         // native SwipeControls, where swiping right past the last swipe
         // spawns a new generation. Regenerates with the end entry's prompt.
-        void regenerateFromSelected()
+        // Gated on the Swipe to Regenerate setting; history-only installs
+        // dead-end here.
+        if (swipeEnabled) void regenerateFromSelected()
         return
       }
       if (next < 0) return
@@ -241,7 +260,9 @@ export function createModals(deps: {
       e.stopPropagation()
       stepHistory(e.key === 'ArrowLeft' ? -1 : 1)
     }
-    window.addEventListener('keydown', arrowHandler, { capture: true })
+    // With history off there is nothing to navigate, so the capture is not
+    // installed and native chat swipes keep their keys — the pre-1.0.7 state.
+    if (historyEnabled) window.addEventListener('keydown', arrowHandler, { capture: true })
 
     // Touch swipe on the preview — same feel as the native message gesture
     // (useSwipeGesture): 10px dead-zone axis lock, then 50px displacement or
@@ -249,29 +270,31 @@ export function createModals(deps: {
     // the synthetic click, so a swipe never opens the lightbox.
     let touchStartX = 0, touchStartY = 0, touchStartT = 0
     let touchLock: 'h' | 'v' | null = null
-    previewWrap.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1) { touchLock = 'v'; return }
-      const t = e.touches[0]!
-      touchStartX = t.clientX; touchStartY = t.clientY; touchStartT = Date.now()
-      touchLock = null
-    }, { passive: true })
-    previewWrap.addEventListener('touchmove', (e) => {
-      if (touchLock) { if (touchLock === 'h') e.preventDefault(); return }
-      const t = e.touches[0]!
-      const dx = t.clientX - touchStartX, dy = t.clientY - touchStartY
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
-      touchLock = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'
-      if (touchLock === 'h') e.preventDefault()
-    }, { passive: false })
-    previewWrap.addEventListener('touchend', (e) => {
-      if (touchLock !== 'h') return
-      const t = e.changedTouches[0]!
-      const dx = t.clientX - touchStartX
-      const dt = Math.max(Date.now() - touchStartT, 1)
-      if (Math.abs(dx) >= 50 || Math.abs(dx) / dt >= 0.3) {
-        stepHistory(dx < 0 ? 1 : -1) // content follows finger: swipe left → next
-      }
-    }, { passive: true })
+    if (historyEnabled) {
+      previewWrap.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) { touchLock = 'v'; return }
+        const t = e.touches[0]!
+        touchStartX = t.clientX; touchStartY = t.clientY; touchStartT = Date.now()
+        touchLock = null
+      }, { passive: true })
+      previewWrap.addEventListener('touchmove', (e) => {
+        if (touchLock) { if (touchLock === 'h') e.preventDefault(); return }
+        const t = e.touches[0]!
+        const dx = t.clientX - touchStartX, dy = t.clientY - touchStartY
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        touchLock = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'
+        if (touchLock === 'h') e.preventDefault()
+      }, { passive: false })
+      previewWrap.addEventListener('touchend', (e) => {
+        if (touchLock !== 'h') return
+        const t = e.changedTouches[0]!
+        const dx = t.clientX - touchStartX
+        const dt = Math.max(Date.now() - touchStartT, 1)
+        if (Math.abs(dx) >= 50 || Math.abs(dx) / dt >= 0.3) {
+          stepHistory(dx < 0 ? 1 : -1) // content follows finger: swipe left → next
+        }
+      }, { passive: true })
+    }
 
     // Replace checkbox
     let replaceChecked = replace || (deps.getSettings()?.defaultAction === 'replace')

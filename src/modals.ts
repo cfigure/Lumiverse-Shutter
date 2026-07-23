@@ -124,8 +124,9 @@ export function createModals(deps: {
     previewWrap.appendChild(preview)
 
     // History navigation — a single pill mirroring the native swipe-controls
-    // bubble (chevrons + tabular counter). Hidden until there's something to
-    // page through.
+    // bubble (chevrons + tabular counter). Always visible, like native at
+    // 1 / 1: the right chevron past the end spawns a new generation, so the
+    // pill is the affordance for "another one" even before history exists.
     const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
     const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
     const makeNavBtn = (dir: -1 | 1): HTMLButtonElement => {
@@ -161,15 +162,66 @@ export function createModals(deps: {
         const img = activeLightbox.overlay.querySelector('img')
         if (img) img.src = entry.imageUrl
       }
-      histPill.style.display = history.length > 1 ? '' : 'none'
       navPrev.disabled = idx === 0
-      navNext.disabled = idx === history.length - 1
+      const atEnd = idx === history.length - 1
+      // Past-the-end spawns a new generation (native swipe semantics), so the
+      // right chevron stays live at the end — disabled only if the prompt
+      // needed to regenerate was never returned.
+      const canRegen = !!history[history.length - 1]!.prompt.trim()
+      navNext.disabled = atEnd && !canRegen
+      navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
       histCount.textContent = `${idx + 1} / ${history.length}`
+    }
+
+    // Shared by the Regenerate Image button and past-the-end navigation
+    // (right chevron / ArrowRight / swipe-left at the last entry). Follows
+    // the existing flow deliberately: dismiss first, hand generating state
+    // to the widget spinner, reopen with the appended result.
+    let regenerating = false
+    async function regenerateFromSelected() {
+      if (regenerating) return
+      const selected = current()
+      const resolvedPrompt = selected.prompt.trim()
+      if (!resolvedPrompt) {
+        modal.dismiss()
+        showErrorModal('Cannot regenerate because the resolved prompt was not returned by native ImageGen.')
+        return
+      }
+
+      regenerating = true
+      modal.dismiss()
+      deps.setGeneratingState(true)
+      try {
+        const result = await deps.callImageGen(chatId, {
+          prompt: resolvedPrompt,
+          negativePrompt: selected.negativePrompt,
+          skipParse: true,
+        })
+        // skipParse routes to 'custom' prompt mode server-side (no scene, so
+        // no skip path), but handle the outcome defensively anyway.
+        if ('skipped' in result) {
+          deps.setGeneratingState(false)
+          deps.notifyGenerationSkipped(result.reason)
+          return
+        }
+        continueGenSession = true
+        deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked)
+      } catch (err: any) {
+        deps.setGeneratingState(false)
+        showErrorModal(deps.parseErrorMessage(err.message))
+      }
     }
 
     function stepHistory(dir: -1 | 1) {
       const next = idx + dir
-      if (next < 0 || next >= history.length) return
+      if (next >= history.length) {
+        // Stepping past the last entry = "give me another one" — mirrors
+        // native SwipeControls, where swiping right past the last swipe
+        // spawns a new generation. Regenerates with the end entry's prompt.
+        void regenerateFromSelected()
+        return
+      }
+      if (next < 0) return
       idx = next
       renderHistory()
     }
@@ -243,39 +295,8 @@ export function createModals(deps: {
       modal.dismiss()
       deps.triggerGenerate(messageId, chatId, isAuto, replaceChecked)
     }))
-    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image\u2019s prompt', 'sh-prompt-btn-secondary', async () => {
-      // Uses the selected entry's prompt, so stepping back to an earlier
-      // generation and regenerating riffs on that prompt (which may differ
-      // after a Rebuild Prompt earlier in the session).
-      const selected = current()
-      const resolvedPrompt = selected.prompt.trim()
-      if (!resolvedPrompt) {
-        modal.dismiss()
-        showErrorModal('Cannot regenerate because the resolved prompt was not returned by native ImageGen.')
-        return
-      }
-
-      modal.dismiss()
-      deps.setGeneratingState(true)
-      try {
-        const result = await deps.callImageGen(chatId, {
-          prompt: resolvedPrompt,
-          negativePrompt: selected.negativePrompt,
-          skipParse: true,
-        })
-        // skipParse routes to 'custom' prompt mode server-side (no scene, so
-        // no skip path), but handle the outcome defensively anyway.
-        if ('skipped' in result) {
-          deps.setGeneratingState(false)
-          deps.notifyGenerationSkipped(result.reason)
-          return
-        }
-        continueGenSession = true
-        deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked)
-      } catch (err: any) {
-        deps.setGeneratingState(false)
-        showErrorModal(deps.parseErrorMessage(err.message))
-      }
+    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image\u2019s prompt', 'sh-prompt-btn-secondary', () => {
+      void regenerateFromSelected()
     }))
     choices.appendChild(makeDestBtn('Insert', 'Append the selected image to the last message', 'sh-prompt-btn-primary', () => {
       ctx.sendToBackend({ type: 'insert_into_message', imageId: current().imageId, messageId, chatId, replace: replaceChecked })

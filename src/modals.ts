@@ -123,12 +123,16 @@ export function createModals(deps: {
     preview.addEventListener('click', () => openLightbox(current().imageUrl))
     previewWrap.appendChild(preview)
 
-    // History navigation — hidden until there's something to page through.
+    // History navigation — a single pill mirroring the native swipe-controls
+    // bubble (chevrons + tabular counter). Hidden until there's something to
+    // page through.
+    const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
+    const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
     const makeNavBtn = (dir: -1 | 1): HTMLButtonElement => {
       const btn = document.createElement('button')
       btn.type = 'button'
-      btn.className = `sh-histnav ${dir === -1 ? 'sh-histnav-prev' : 'sh-histnav-next'}`
-      btn.textContent = dir === -1 ? '‹' : '›'
+      btn.className = 'sh-hist-btn'
+      btn.innerHTML = dir === -1 ? CHEVRON_LEFT : CHEVRON_RIGHT
       btn.title = dir === -1 ? 'Previous generation' : 'Next generation'
       btn.addEventListener('click', (e) => {
         e.stopPropagation() // don't trip the preview's lightbox handler
@@ -138,11 +142,15 @@ export function createModals(deps: {
     }
     const navPrev = makeNavBtn(-1)
     const navNext = makeNavBtn(1)
-    const histCount = document.createElement('div')
-    histCount.className = 'sh-histcount'
-    previewWrap.appendChild(navPrev)
-    previewWrap.appendChild(navNext)
-    previewWrap.appendChild(histCount)
+    const histCount = document.createElement('span')
+    histCount.className = 'sh-hist-counter'
+    const histPill = document.createElement('div')
+    histPill.className = 'sh-hist-pill'
+    histPill.addEventListener('click', (e) => e.stopPropagation())
+    histPill.appendChild(navPrev)
+    histPill.appendChild(histCount)
+    histPill.appendChild(navNext)
+    previewWrap.appendChild(histPill)
     container.appendChild(previewWrap)
 
     function renderHistory() {
@@ -153,10 +161,7 @@ export function createModals(deps: {
         const img = activeLightbox.overlay.querySelector('img')
         if (img) img.src = entry.imageUrl
       }
-      const multi = history.length > 1
-      navPrev.style.display = multi ? '' : 'none'
-      navNext.style.display = multi ? '' : 'none'
-      histCount.style.display = multi ? '' : 'none'
+      histPill.style.display = history.length > 1 ? '' : 'none'
       navPrev.disabled = idx === 0
       navNext.disabled = idx === history.length - 1
       histCount.textContent = `${idx + 1} / ${history.length}`
@@ -169,11 +174,52 @@ export function createModals(deps: {
       renderHistory()
     }
 
+    // Capture-phase, window-level: Lumiverse's swipe hotkeys are a global
+    // document-level keydown listener whose modal guard only knows about
+    // native modals (state.activeModal), not Spindle ones — so while this
+    // modal is up, arrows must be consumed before they reach it, or paging
+    // history would also swipe the assistant message underneath. Consumed
+    // even at 1/1 so a locked-foreground modal never leaks arrows to chat.
     const arrowHandler = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') { e.preventDefault(); stepHistory(-1) }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); stepHistory(1) }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return // leave browser/OS combos alone
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return
+      e.preventDefault()
+      e.stopPropagation()
+      stepHistory(e.key === 'ArrowLeft' ? -1 : 1)
     }
-    document.addEventListener('keydown', arrowHandler)
+    window.addEventListener('keydown', arrowHandler, { capture: true })
+
+    // Touch swipe on the preview — same feel as the native message gesture
+    // (useSwipeGesture): 10px dead-zone axis lock, then 50px displacement or
+    // 0.3px/ms velocity. preventDefault on horizontal lock also suppresses
+    // the synthetic click, so a swipe never opens the lightbox.
+    let touchStartX = 0, touchStartY = 0, touchStartT = 0
+    let touchLock: 'h' | 'v' | null = null
+    previewWrap.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { touchLock = 'v'; return }
+      const t = e.touches[0]!
+      touchStartX = t.clientX; touchStartY = t.clientY; touchStartT = Date.now()
+      touchLock = null
+    }, { passive: true })
+    previewWrap.addEventListener('touchmove', (e) => {
+      if (touchLock) { if (touchLock === 'h') e.preventDefault(); return }
+      const t = e.touches[0]!
+      const dx = t.clientX - touchStartX, dy = t.clientY - touchStartY
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+      touchLock = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'
+      if (touchLock === 'h') e.preventDefault()
+    }, { passive: false })
+    previewWrap.addEventListener('touchend', (e) => {
+      if (touchLock !== 'h') return
+      const t = e.changedTouches[0]!
+      const dx = t.clientX - touchStartX
+      const dt = Math.max(Date.now() - touchStartT, 1)
+      if (Math.abs(dx) >= 50 || Math.abs(dx) / dt >= 0.3) {
+        stepHistory(dx < 0 ? 1 : -1) // content follows finger: swipe left → next
+      }
+    }, { passive: true })
 
     // Replace checkbox
     let replaceChecked = replace || (deps.getSettings()?.defaultAction === 'replace')
@@ -241,7 +287,7 @@ export function createModals(deps: {
     renderHistory()
 
     modal.onDismiss(() => {
-      document.removeEventListener('keydown', arrowHandler)
+      window.removeEventListener('keydown', arrowHandler, { capture: true })
       replaceCheckbox.destroy()
     })
   }

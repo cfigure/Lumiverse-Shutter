@@ -52,13 +52,13 @@ export const SHUTTER_CSS = `
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
 
-    /* ── Generation history nav (destination modal) ── */
-    .sh-histnav { position: absolute; top: 50%; transform: translateY(-50%); width: 32px; height: 48px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 8px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; opacity: 0.85; z-index: 2; user-select: none; }
-    .sh-histnav:hover:not(:disabled) { opacity: 1; background: rgba(0, 0, 0, 0.65); }
-    .sh-histnav:disabled { opacity: 0.25; cursor: default; }
-    .sh-histnav-prev { left: 8px; }
-    .sh-histnav-next { right: 8px; }
-    .sh-histcount { position: absolute; bottom: 8px; right: 8px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: calc(11px * var(--lumiverse-font-scale, 1)); z-index: 2; pointer-events: none; }
+    /* ── Generation history nav — matches SwipeControls.module.css (.bubble variant) ── */
+    .sh-hist-pill { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 16px; background: var(--lumiverse-fill-heavy); border: 1px solid var(--lumiverse-border); font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace; font-size: calc(11px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); letter-spacing: 0.04em; z-index: 2; cursor: default; }
+    .sh-hist-btn { display: flex; align-items: center; justify-content: center; width: var(--lumiverse-btn-icon-sm, 24px); height: var(--lumiverse-btn-icon-sm, 24px); padding: 0; background: transparent; border: none; border-radius: 6px; color: var(--lumiverse-text-dim); cursor: pointer; transition: all var(--lumiverse-transition-fast, 0.15s); }
+    .sh-hist-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+    .sh-hist-btn:disabled { color: var(--lumiverse-text-hint); opacity: 1; cursor: default; }
+    .sh-hist-btn svg { width: 16px; height: 16px; }
+    .sh-hist-counter { min-width: 32px; text-align: center; user-select: none; font-variant-numeric: tabular-nums; }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }

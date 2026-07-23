@@ -83,44 +83,33 @@ export function createModals(deps: {
   //
   // Every generation is already persisted server-side with a stable imageId
   // (regenerating never deletes the previous result), so history is pure
-  // client-side bookkeeping: remember the ids + resolved prompts per
-  // (chat, message) session and let the destination modal page through them.
-  // Insert and Regenerate act on the entry being viewed, so stepping back to
-  // an earlier image and inserting it — or regenerating from its prompt —
-  // just works. Entries are strings only; caps keep long sessions bounded.
+  // client-side bookkeeping. Scope is one *prompt cycle*: only Regenerate
+  // Image continues a session (it re-enters the modal without going through
+  // triggerGenerate); Rebuild Prompt, a fresh widget trigger, or
+  // auto-generate all start a clean one. Keying by chat/message doesn't work
+  // here — widget-triggered generations have no messageId until insert time
+  // ('__last__' is resolved backend-side), so every generation in a chat
+  // would share one key and swipes/new messages would inherit stale images.
 
   type GenHistoryEntry = { imageId: string; imageUrl: string; prompt: string; negativePrompt: string }
-  const genHistories = new Map<string, GenHistoryEntry[]>()
   const GEN_HISTORY_CAP = 10
-  const GEN_HISTORY_KEY_CAP = 20
-
-  function getGenHistory(chatId: string, messageId: string): GenHistoryEntry[] {
-    const key = `${chatId}:${messageId}`
-    let arr = genHistories.get(key)
-    if (!arr) {
-      arr = []
-      genHistories.set(key, arr)
-      // FIFO-bound the number of sessions tracked (Map preserves insertion order)
-      while (genHistories.size > GEN_HISTORY_KEY_CAP) {
-        const oldest = genHistories.keys().next().value
-        if (oldest === undefined) break
-        genHistories.delete(oldest)
-      }
-    }
-    return arr
-  }
+  let genSession: GenHistoryEntry[] = []
+  // Set immediately before the Regenerate path re-enters
+  // handleGenerationResult → openDestinationModal; consumed on open.
+  let continueGenSession = false
 
   function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
-    // Join (or start) this message's generation history. Re-opens for an
-    // already-known image (e.g. after an error round-trip) select it instead
-    // of duplicating.
-    const history = getGenHistory(chatId, messageId)
-    let idx = history.findIndex(e => e.imageId === imageId)
-    if (idx === -1) {
+    // Continue the session only when re-entered via Regenerate Image;
+    // every other arrival is a new prompt cycle and starts clean.
+    if (!continueGenSession) genSession = []
+    continueGenSession = false
+
+    const history = genSession
+    if (history[history.length - 1]?.imageId !== imageId) {
       history.push({ imageId, imageUrl, prompt, negativePrompt })
       if (history.length > GEN_HISTORY_CAP) history.shift()
-      idx = history.length - 1
     }
+    let idx = history.length - 1
     const current = () => history[idx]!
 
     const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
@@ -235,6 +224,7 @@ export function createModals(deps: {
           deps.notifyGenerationSkipped(result.reason)
           return
         }
+        continueGenSession = true
         deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked)
       } catch (err: any) {
         deps.setGeneratingState(false)

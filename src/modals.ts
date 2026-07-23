@@ -79,7 +79,50 @@ export function createModals(deps: {
     return btn
   }
 
+  // ── Generation history (1.0.7) ──
+  //
+  // Every generation is already persisted server-side with a stable imageId
+  // (regenerating never deletes the previous result), so history is pure
+  // client-side bookkeeping: remember the ids + resolved prompts per
+  // (chat, message) session and let the destination modal page through them.
+  // Insert and Regenerate act on the entry being viewed, so stepping back to
+  // an earlier image and inserting it — or regenerating from its prompt —
+  // just works. Entries are strings only; caps keep long sessions bounded.
+
+  type GenHistoryEntry = { imageId: string; imageUrl: string; prompt: string; negativePrompt: string }
+  const genHistories = new Map<string, GenHistoryEntry[]>()
+  const GEN_HISTORY_CAP = 10
+  const GEN_HISTORY_KEY_CAP = 20
+
+  function getGenHistory(chatId: string, messageId: string): GenHistoryEntry[] {
+    const key = `${chatId}:${messageId}`
+    let arr = genHistories.get(key)
+    if (!arr) {
+      arr = []
+      genHistories.set(key, arr)
+      // FIFO-bound the number of sessions tracked (Map preserves insertion order)
+      while (genHistories.size > GEN_HISTORY_KEY_CAP) {
+        const oldest = genHistories.keys().next().value
+        if (oldest === undefined) break
+        genHistories.delete(oldest)
+      }
+    }
+    return arr
+  }
+
   function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
+    // Join (or start) this message's generation history. Re-opens for an
+    // already-known image (e.g. after an error round-trip) select it instead
+    // of duplicating.
+    const history = getGenHistory(chatId, messageId)
+    let idx = history.findIndex(e => e.imageId === imageId)
+    if (idx === -1) {
+      history.push({ imageId, imageUrl, prompt, negativePrompt })
+      if (history.length > GEN_HISTORY_CAP) history.shift()
+      idx = history.length - 1
+    }
+    const current = () => history[idx]!
+
     const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
@@ -88,9 +131,60 @@ export function createModals(deps: {
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
     preview.src = imageUrl
-    preview.addEventListener('click', () => openLightbox(imageUrl))
+    preview.addEventListener('click', () => openLightbox(current().imageUrl))
     previewWrap.appendChild(preview)
+
+    // History navigation — hidden until there's something to page through.
+    const makeNavBtn = (dir: -1 | 1): HTMLButtonElement => {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = `sh-histnav ${dir === -1 ? 'sh-histnav-prev' : 'sh-histnav-next'}`
+      btn.textContent = dir === -1 ? '‹' : '›'
+      btn.title = dir === -1 ? 'Previous generation' : 'Next generation'
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation() // don't trip the preview's lightbox handler
+        stepHistory(dir)
+      })
+      return btn
+    }
+    const navPrev = makeNavBtn(-1)
+    const navNext = makeNavBtn(1)
+    const histCount = document.createElement('div')
+    histCount.className = 'sh-histcount'
+    previewWrap.appendChild(navPrev)
+    previewWrap.appendChild(navNext)
+    previewWrap.appendChild(histCount)
     container.appendChild(previewWrap)
+
+    function renderHistory() {
+      const entry = current()
+      preview.src = entry.imageUrl
+      // If the mini lightbox is open, keep it in sync with the selection.
+      if (activeLightbox) {
+        const img = activeLightbox.overlay.querySelector('img')
+        if (img) img.src = entry.imageUrl
+      }
+      const multi = history.length > 1
+      navPrev.style.display = multi ? '' : 'none'
+      navNext.style.display = multi ? '' : 'none'
+      histCount.style.display = multi ? '' : 'none'
+      navPrev.disabled = idx === 0
+      navNext.disabled = idx === history.length - 1
+      histCount.textContent = `${idx + 1} / ${history.length}`
+    }
+
+    function stepHistory(dir: -1 | 1) {
+      const next = idx + dir
+      if (next < 0 || next >= history.length) return
+      idx = next
+      renderHistory()
+    }
+
+    const arrowHandler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') { e.preventDefault(); stepHistory(-1) }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); stepHistory(1) }
+    }
+    document.addEventListener('keydown', arrowHandler)
 
     // Replace checkbox
     let replaceChecked = replace || (deps.getSettings()?.defaultAction === 'replace')
@@ -114,8 +208,12 @@ export function createModals(deps: {
       modal.dismiss()
       deps.triggerGenerate(messageId, chatId, isAuto, replaceChecked)
     }))
-    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the same prompt', 'sh-prompt-btn-secondary', async () => {
-      const resolvedPrompt = prompt.trim()
+    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image\u2019s prompt', 'sh-prompt-btn-secondary', async () => {
+      // Uses the selected entry's prompt, so stepping back to an earlier
+      // generation and regenerating riffs on that prompt (which may differ
+      // after a Rebuild Prompt earlier in the session).
+      const selected = current()
+      const resolvedPrompt = selected.prompt.trim()
       if (!resolvedPrompt) {
         modal.dismiss()
         showErrorModal('Cannot regenerate because the resolved prompt was not returned by native ImageGen.')
@@ -127,7 +225,7 @@ export function createModals(deps: {
       try {
         const result = await deps.callImageGen(chatId, {
           prompt: resolvedPrompt,
-          negativePrompt,
+          negativePrompt: selected.negativePrompt,
           skipParse: true,
         })
         // skipParse routes to 'custom' prompt mode server-side (no scene, so
@@ -143,14 +241,17 @@ export function createModals(deps: {
         showErrorModal(deps.parseErrorMessage(err.message))
       }
     }))
-    choices.appendChild(makeDestBtn('Insert', 'Append to the last message', 'sh-prompt-btn-primary', () => {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId, messageId, chatId, replace: replaceChecked })
+    choices.appendChild(makeDestBtn('Insert', 'Append the selected image to the last message', 'sh-prompt-btn-primary', () => {
+      ctx.sendToBackend({ type: 'insert_into_message', imageId: current().imageId, messageId, chatId, replace: replaceChecked })
       modal.dismiss()
     }))
     container.appendChild(choices)
     modal.root.appendChild(container)
 
+    renderHistory()
+
     modal.onDismiss(() => {
+      document.removeEventListener('keydown', arrowHandler)
       replaceCheckbox.destroy()
     })
   }

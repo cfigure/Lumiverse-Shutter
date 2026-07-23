@@ -467,6 +467,7 @@ export function createSettingsPanel(deps: {
     handles = null
     rowWidgetSize = null
     rowWidgetStyle = null
+    rowGestureNavigation = null
     rowInterval = null
     rowRandom = null
     rowAutoAfter = null
@@ -492,6 +493,8 @@ export function createSettingsPanel(deps: {
     // Shared components — use update()
     handles.showFloatWidget.update({ checked: s.showFloatWidget })
     handles.toastOnInsert.update({ checked: s.toastOnInsert })
+    handles.generationHistory.update({ checked: s.generationHistory })
+    handles.gestureNavigation.update({ checked: s.gestureNavigation })
     handles.autoGenerateInterval.update({ value: s.autoGenerateInterval })
     handles.autoGenerateRandomMin.update({ value: s.autoGenerateRandomMin })
     handles.autoGenerateRandomMax.update({ value: s.autoGenerateRandomMax })
@@ -512,6 +515,7 @@ export function createSettingsPanel(deps: {
     if (selectShutterImageAlign) selectShutterImageAlign.value = s.shutterImageAlign
 
     updateFloatingWidgetRowVisibility(s.showFloatWidget)
+    updateGenerationHistoryRowVisibility(s.generationHistory)
     updateShutterImageLayoutVisibility(s.shutterImageLayout)
     updateAutoRowVisibility(s.autoGenerate)
   }

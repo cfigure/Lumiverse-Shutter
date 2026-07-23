@@ -352,7 +352,7 @@ export function setup(ctx: SpindleFrontendContext) {
     updateFloatBtnState()
   }
 
-  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace = false) {
+  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace = false, continueHistory = false) {
     setGeneratingState(false)
     resetAutoGenCounter()
 
@@ -362,7 +362,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (afterAction === 'auto_insert') {
       ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId, replace })
     } else {
-      modals.openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto, replace)
+      modals.openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto, replace, continueHistory)
     }
   }
 

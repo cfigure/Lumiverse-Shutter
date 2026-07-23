@@ -17,7 +17,7 @@ export function createModals(deps: {
   comms: Comms
   getSettings: () => Settings | null
   triggerGenerate: (messageId?: string, chatId?: string, isAuto?: boolean, replace?: boolean, force?: boolean) => void
-  handleGenerationResult: (result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace?: boolean) => void
+  handleGenerationResult: (result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace?: boolean, continueHistory?: boolean) => void
   setGeneratingState: (active: boolean) => void
   callImageGen: (chatId: string, overrides?: Record<string, any>) => Promise<GenerationResult | GenerationSkipped>
   callPreviewPrompt: (chatId: string) => Promise<{ prompt: string; negativePrompt: string }>
@@ -94,11 +94,8 @@ export function createModals(deps: {
   type GenHistoryEntry = { imageId: string; imageUrl: string; prompt: string; negativePrompt: string }
   const GEN_HISTORY_CAP = 10
   let genSession: GenHistoryEntry[] = []
-  // Set immediately before the Regenerate path re-enters
-  // handleGenerationResult → openDestinationModal; consumed on open.
-  let continueGenSession = false
 
-  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
+  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false, continueHistory = false) {
     // Feature tiers (both default off): Generation History enables the pill,
     // session retention, and chevron navigation including spawn-past-the-end
     // (chevrons always work, mirroring native SwipeControls). Gesture
@@ -112,8 +109,7 @@ export function createModals(deps: {
 
     // Continue the session only when re-entered via Regenerate Image;
     // every other arrival is a new prompt cycle and starts clean.
-    if (!historyEnabled || !continueGenSession) genSession = []
-    continueGenSession = false
+    if (!historyEnabled || !continueHistory) genSession = []
 
     const history = genSession
     if (history[history.length - 1]?.imageId !== imageId) {
@@ -219,8 +215,7 @@ export function createModals(deps: {
           deps.notifyGenerationSkipped(result.reason)
           return
         }
-        continueGenSession = true
-        deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked)
+        deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked, true)
       } catch (err: any) {
         deps.setGeneratingState(false)
         showErrorModal(deps.parseErrorMessage(err.message))
@@ -328,6 +323,7 @@ export function createModals(deps: {
     renderHistory()
 
     modal.onDismiss(() => {
+      dismissLightbox()
       window.removeEventListener('keydown', arrowHandler, { capture: true })
       replaceCheckbox.destroy()
     })

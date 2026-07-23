@@ -21,7 +21,7 @@ export type Settings = {
   showFloatWidget: boolean
   toastOnInsert: boolean
   generationHistory: boolean
-  swipeToRegenerate: boolean
+  gestureNavigation: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   widgetSize: 'small' | 'medium' | 'large' | 'xlarge'
   widgetStyle: 'color' | 'mono'
@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFloatWidget: false,
   toastOnInsert: true,
   generationHistory: false,
-  swipeToRegenerate: false,
+  gestureNavigation: false,
   afterGenerate: 'ask_to_insert',
   widgetSize: 'small',
   widgetStyle: 'color',

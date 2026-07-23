@@ -99,13 +99,16 @@ export function createModals(deps: {
   let continueGenSession = false
 
   function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false) {
-    // Feature tiers (both default off): history enables the pill + session
-    // retention; swipe (child setting) additionally lets stepping past the
-    // end spawn a new generation. With history off the modal is exactly the
-    // pre-1.0.7 flow — single image, no pill, no gesture/keyboard capture.
+    // Feature tiers (both default off): Generation History enables the pill,
+    // session retention, and chevron navigation including spawn-past-the-end
+    // (chevrons always work, mirroring native SwipeControls). Gesture
+    // Navigation (child) additionally enables the touch-swipe and arrow-key
+    // input channels, mirroring native swipeGesturesEnabled. With history off
+    // the modal is exactly the pre-1.0.7 flow — single image, no pill, no
+    // gesture/keyboard capture.
     const settings = deps.getSettings()
     const historyEnabled = settings?.generationHistory === true
-    const swipeEnabled = historyEnabled && settings?.swipeToRegenerate === true
+    const gestureEnabled = historyEnabled && settings?.gestureNavigation === true
 
     // Continue the session only when re-entered via Regenerate Image;
     // every other arrival is a new prompt cycle and starts clean.
@@ -170,23 +173,18 @@ export function createModals(deps: {
         const img = activeLightbox.overlay.querySelector('img')
         if (img) img.src = entry.imageUrl
       }
-      // History-only tier: pill appears once there's something to browse.
-      // Swipe tier: always visible (native 1/1 semantics — the right chevron
-      // past the end spawns a new generation, so the pill is the affordance).
-      histPill.style.display = (swipeEnabled || history.length > 1) ? '' : 'none'
+      // Always visible within the history tier, like native at 1 / 1: the
+      // right chevron past the end spawns a new generation regardless of the
+      // Gesture Navigation setting (chevrons are the feature; gestures are
+      // extra input channels).
       navPrev.disabled = idx === 0
       const atEnd = idx === history.length - 1
-      if (swipeEnabled) {
-        // Past-the-end spawns a new generation (native swipe semantics), so
-        // the right chevron stays live at the end — disabled only if the
-        // prompt needed to regenerate was never returned.
-        const canRegen = !!history[history.length - 1]!.prompt.trim()
-        navNext.disabled = atEnd && !canRegen
-        navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
-      } else {
-        navNext.disabled = atEnd
-        navNext.title = 'Next generation'
-      }
+      // Past-the-end spawns a new generation (native swipe semantics), so
+      // the right chevron stays live at the end — disabled only if the
+      // prompt needed to regenerate was never returned.
+      const canRegen = !!history[history.length - 1]!.prompt.trim()
+      navNext.disabled = atEnd && !canRegen
+      navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
       histCount.textContent = `${idx + 1} / ${history.length}`
     }
 
@@ -235,9 +233,7 @@ export function createModals(deps: {
         // Stepping past the last entry = "give me another one" — mirrors
         // native SwipeControls, where swiping right past the last swipe
         // spawns a new generation. Regenerates with the end entry's prompt.
-        // Gated on the Swipe to Regenerate setting; history-only installs
-        // dead-end here.
-        if (swipeEnabled) void regenerateFromSelected()
+        void regenerateFromSelected()
         return
       }
       if (next < 0) return
@@ -260,9 +256,10 @@ export function createModals(deps: {
       e.stopPropagation()
       stepHistory(e.key === 'ArrowLeft' ? -1 : 1)
     }
-    // With history off there is nothing to navigate, so the capture is not
-    // installed and native chat swipes keep their keys — the pre-1.0.7 state.
-    if (historyEnabled) window.addEventListener('keydown', arrowHandler, { capture: true })
+    // Installed only when Gesture Navigation is on — that setting is the
+    // arrow-key channel, mirroring native swipeGesturesEnabled. When off,
+    // native chat swipes keep their keys (the pre-1.0.7 state).
+    if (gestureEnabled) window.addEventListener('keydown', arrowHandler, { capture: true })
 
     // Touch swipe on the preview — same feel as the native message gesture
     // (useSwipeGesture): 10px dead-zone axis lock, then 50px displacement or
@@ -270,7 +267,7 @@ export function createModals(deps: {
     // the synthetic click, so a swipe never opens the lightbox.
     let touchStartX = 0, touchStartY = 0, touchStartT = 0
     let touchLock: 'h' | 'v' | null = null
-    if (historyEnabled) {
+    if (gestureEnabled) {
       previewWrap.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) { touchLock = 'v'; return }
         const t = e.touches[0]!

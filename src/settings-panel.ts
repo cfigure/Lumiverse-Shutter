@@ -30,7 +30,7 @@ export function createSettingsPanel(deps: {
     showFloatWidget: any
     toastOnInsert: any
     generationHistory: any
-    swipeToRegenerate: any
+    gestureNavigation: any
     removeImageTagsFromContext: any
     showPromptInLightbox: any
     autoGenerateInterval: any
@@ -45,7 +45,7 @@ export function createSettingsPanel(deps: {
   // Conditional rows that show/hide based on other settings
   let rowWidgetSize: HTMLElement | null = null
   let rowWidgetStyle: HTMLElement | null = null
-  let rowSwipeToRegenerate: HTMLElement | null = null
+  let rowGestureNavigation: HTMLElement | null = null
   let rowInterval: HTMLElement | null = null
   let rowRandom: HTMLElement | null = null
   let rowAutoAfter: HTMLElement | null = null
@@ -195,13 +195,15 @@ export function createSettingsPanel(deps: {
       },
     })
 
-    // Swipe to Regenerate (child — hidden while Generation History is off)
-    const swipeRegenRow = makeRow('Swipe to Regenerate', 'Swipe past the last image (mobile), press the right arrow key (desktop), or tap the chevron to generate another with the same prompt.')
-    container.appendChild(swipeRegenRow.row)
-    rowSwipeToRegenerate = swipeRegenRow.row
-    const swipeToRegenerate = ctx.components.mountSwitch(swipeRegenRow.controlSlot, {
-      checked: s.swipeToRegenerate,
-      onChange: (on: boolean) => deps.updateSettings({ swipeToRegenerate: on }),
+    // Gesture Navigation (child — hidden while Generation History is off).
+    // Gates input channels only (touch + arrow keys), matching native's
+    // swipeGesturesEnabled: the pill chevrons work regardless.
+    const gestureNavRow = makeRow('Gesture Navigation', 'Browse versions with touch swipes (mobile) or arrow keys (desktop).')
+    container.appendChild(gestureNavRow.row)
+    rowGestureNavigation = gestureNavRow.row
+    const gestureNavigation = ctx.components.mountSwitch(gestureNavRow.controlSlot, {
+      checked: s.gestureNavigation,
+      onChange: (on: boolean) => deps.updateSettings({ gestureNavigation: on }),
     })
 
     // Toast on Insert
@@ -412,7 +414,7 @@ export function createSettingsPanel(deps: {
       showFloatWidget,
       toastOnInsert,
       generationHistory,
-      swipeToRegenerate,
+      gestureNavigation,
       removeImageTagsFromContext,
       showPromptInLightbox,
       autoGenerateInterval,
@@ -429,7 +431,7 @@ export function createSettingsPanel(deps: {
   }
 
   function updateGenerationHistoryRowVisibility(show: boolean) {
-    if (rowSwipeToRegenerate) rowSwipeToRegenerate.style.display = show ? '' : 'none'
+    if (rowGestureNavigation) rowGestureNavigation.style.display = show ? '' : 'none'
   }
 
   function updateShutterImageLayoutVisibility(mode: Settings['shutterImageLayout']) {
@@ -454,7 +456,7 @@ export function createSettingsPanel(deps: {
     handles.showFloatWidget.destroy()
     handles.toastOnInsert.destroy()
     handles.generationHistory.destroy()
-    handles.swipeToRegenerate.destroy()
+    handles.gestureNavigation.destroy()
     handles.removeImageTagsFromContext.destroy()
     handles.showPromptInLightbox.destroy()
     handles.autoGenerateInterval.destroy()

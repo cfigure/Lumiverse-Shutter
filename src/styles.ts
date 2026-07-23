@@ -54,11 +54,18 @@ export const SHUTTER_CSS = `
 
     /* ── Generation history nav — matches SwipeControls.module.css (.bubble variant) ── */
     .sh-hist-pill { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 16px; background: var(--lumiverse-fill-heavy); border: 1px solid var(--lumiverse-border); font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace; font-size: calc(11px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); letter-spacing: 0.04em; z-index: 2; cursor: default; }
-    .sh-hist-btn { display: flex; align-items: center; justify-content: center; width: var(--lumiverse-btn-icon-sm, 24px); height: var(--lumiverse-btn-icon-sm, 24px); padding: 0; background: transparent; border: none; border-radius: 6px; color: var(--lumiverse-text-dim); cursor: pointer; transition: all var(--lumiverse-transition-fast, 0.15s); }
+    .sh-hist-btn { position: relative; display: flex; align-items: center; justify-content: center; width: var(--lumiverse-btn-icon-sm, 24px); height: var(--lumiverse-btn-icon-sm, 24px); padding: 0; background: transparent; border: none; border-radius: 6px; color: var(--lumiverse-text-dim); cursor: pointer; transition: all var(--lumiverse-transition-fast, 0.15s); }
+    /* Invisible hit-area extension: ~40px effective touch target while the
+       visual stays at native SwipeControls size. */
+    .sh-hist-btn::after { content: ''; position: absolute; inset: -8px; }
     .sh-hist-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
     .sh-hist-btn:disabled { color: var(--lumiverse-text-hint); opacity: 1; cursor: default; }
     .sh-hist-btn svg { width: 16px; height: 16px; }
     .sh-hist-counter { min-width: 32px; text-align: center; user-select: none; font-variant-numeric: tabular-nums; }
+    /* Mirror SwipeControls' mobile margin tightening: tuck the pill further
+       into the corner on phones to minimize overlap with the artwork. */
+    @media (max-width: 768px) { .sh-hist-pill { right: 8px; bottom: 8px; } }
+    @media (max-width: 480px) { .sh-hist-pill { right: 6px; bottom: 6px; } }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }

@@ -62,10 +62,17 @@ export const SHUTTER_CSS = `
     .sh-hist-btn:disabled { color: var(--lumiverse-text-hint); opacity: 1; cursor: default; }
     .sh-hist-btn svg { width: 16px; height: 16px; }
     .sh-hist-counter { min-width: 32px; text-align: center; user-select: none; font-variant-numeric: tabular-nums; }
-    /* Mirror SwipeControls' mobile margin tightening: tuck the pill further
-       into the corner on phones to minimize overlap with the artwork. */
-    @media (max-width: 768px) { .sh-hist-pill { right: 8px; bottom: 8px; } }
-    @media (max-width: 480px) { .sh-hist-pill { right: 6px; bottom: 6px; } }
+    /* Mobile: same position, reduced chrome weight (type unchanged — Shutter's
+       type scale is universal; layout adapts, fonts don't). Buttons/icons/
+       padding shrink ~18%; expanded hit-areas hold ~40px touch targets.
+       Breakpoint matches the modal's action-grid pivot below. */
+    @media (max-width: 560px) {
+      .sh-hist-pill { right: 6px; bottom: 6px; gap: 1px; padding: 2px 3px; border-radius: 14px; }
+      .sh-hist-btn { width: 20px; height: 20px; }
+      .sh-hist-btn::after { inset: -10px; }
+      .sh-hist-btn svg { width: 14px; height: 14px; }
+      .sh-hist-counter { min-width: 26px; }
+    }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }

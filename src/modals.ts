@@ -32,13 +32,61 @@ export function createModals(deps: {
 
   // ── Lightbox state (for cleanup) ──
 
-  let activeLightbox: { overlay: HTMLElement; escHandler: (e: KeyboardEvent) => void } | null = null
+  let activeLightbox: { overlay: HTMLElement; keyHandler: (e: KeyboardEvent) => void } | null = null
 
   function dismissLightbox() {
     if (!activeLightbox) return
-    document.removeEventListener('keydown', activeLightbox.escHandler)
+    window.removeEventListener('keydown', activeLightbox.keyHandler, { capture: true })
     activeLightbox.overlay.remove()
     activeLightbox = null
+  }
+
+  function isEditableTarget(target: EventTarget | null): boolean {
+    const el = target instanceof HTMLElement ? target : document.activeElement as HTMLElement | null
+    return !!el && (
+      el.tagName === 'INPUT' ||
+      el.tagName === 'TEXTAREA' ||
+      el.tagName === 'SELECT' ||
+      el.isContentEditable
+    )
+  }
+
+  // Spindle modals are visually foregrounded, but Lumiverse's global chat
+  // navigation does not treat them as native active modals. Isolate arrows
+  // and touch gestures at the modal root so background chat navigation cannot
+  // react. Editable controls keep their native caret/selection behaviour.
+  function isolateModalInput(modal: { root: HTMLElement; dismiss(): void; onDismiss(callback: () => void): void }) {
+    const arrowBlocker = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (!isEditableTarget(e.target)) e.preventDefault()
+      e.stopPropagation()
+    }
+    const touchBlocker = (e: TouchEvent) => {
+      e.stopPropagation()
+    }
+    const escapeHandler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || activeLightbox) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      modal.dismiss()
+    }
+
+    modal.root.addEventListener('keydown', arrowBlocker)
+    modal.root.addEventListener('touchstart', touchBlocker)
+    modal.root.addEventListener('touchmove', touchBlocker)
+    modal.root.addEventListener('touchend', touchBlocker)
+    modal.root.addEventListener('touchcancel', touchBlocker)
+    window.addEventListener('keydown', escapeHandler, { capture: true })
+
+    modal.onDismiss(() => {
+      modal.root.removeEventListener('keydown', arrowBlocker)
+      modal.root.removeEventListener('touchstart', touchBlocker)
+      modal.root.removeEventListener('touchmove', touchBlocker)
+      modal.root.removeEventListener('touchend', touchBlocker)
+      modal.root.removeEventListener('touchcancel', touchBlocker)
+      window.removeEventListener('keydown', escapeHandler, { capture: true })
+    })
   }
 
   function openLightbox(src: string) {
@@ -61,12 +109,31 @@ export function createModals(deps: {
       if (e.target === overlay && mouseDownTarget === overlay) dismissLightbox()
     })
 
-    const escHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') dismissLightbox()
+    // The preview lightbox is intentionally a static viewer. Consume arrows
+    // so neither the Generate Image modal nor the background chat can react.
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        dismissLightbox()
+        return
+      }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
     }
-    document.addEventListener('keydown', escHandler)
+    window.addEventListener('keydown', keyHandler, { capture: true })
 
-    activeLightbox = { overlay, escHandler }
+    // Keep touch gestures inside the lightbox. There is deliberately no
+    // swipe navigation here; history remains owned by the underlying modal.
+    const stopTouch = (e: TouchEvent) => e.stopPropagation()
+    overlay.addEventListener('touchstart', stopTouch)
+    overlay.addEventListener('touchmove', stopTouch)
+    overlay.addEventListener('touchend', stopTouch)
+    overlay.addEventListener('touchcancel', stopTouch)
+
+    activeLightbox = { overlay, keyHandler }
     document.body.appendChild(overlay)
   }
 
@@ -118,6 +185,7 @@ export function createModals(deps: {
     const current = () => history[idx]!
 
     const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
+    isolateModalInput(modal)
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 
@@ -243,15 +311,18 @@ export function createModals(deps: {
     const arrowHandler = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
       if (e.ctrlKey || e.metaKey || e.altKey) return // leave browser/OS combos alone
+      // The preview lightbox owns foreground input while open. Its own
+      // handler consumes the event without navigating or regenerating.
+      if (activeLightbox) return
       const active = document.activeElement as HTMLElement | null
       if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return
       e.preventDefault()
       e.stopPropagation()
       stepHistory(e.key === 'ArrowLeft' ? -1 : 1)
     }
-    // Installed only when Gesture Navigation is on — that setting is the
-    // arrow-key channel, mirroring native swipeGesturesEnabled. When off,
-    // native chat swipes keep their keys (the pre-1.0.7 state).
+    // Installed only when Gesture Navigation is on — that setting owns the
+    // active arrow-key navigation path. isolateModalInput handles the inactive
+    // state so arrows do nothing rather than leaking to the background chat.
     if (gestureEnabled) window.addEventListener('keydown', arrowHandler, { capture: true })
 
     // Touch swipe on the preview — same feel as the native message gesture
@@ -301,7 +372,7 @@ export function createModals(deps: {
 
     const choices = document.createElement('div')
     choices.className = 'sh-prompt-actions'
-    choices.appendChild(makeDestBtn('Done', 'Close without inserting', 'sh-prompt-btn-cancel', () => {
+    choices.appendChild(makeDestBtn('Close', 'Close without inserting', 'sh-prompt-btn-cancel', () => {
       modal.dismiss()
     }))
     choices.appendChild(makeDestBtn('Rebuild Prompt', 'Re-parse the chat and generate a new prompt', 'sh-prompt-btn-secondary', () => {
@@ -355,6 +426,7 @@ export function createModals(deps: {
     promptViewerOpen = true
 
     const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 })
+    isolateModalInput(modal)
     let dismissed = false
 
     const container = document.createElement('div')
@@ -473,6 +545,7 @@ export function createModals(deps: {
     if (promptPreviewOpen) return
     promptPreviewOpen = true
     const modal = ctx.ui.showModal({ title: 'Preview & Edit Image Prompt', width: 640, persistent: true })
+    isolateModalInput(modal)
     // Reset the gate on every dismissal path — Cancel, Generate, the header
     // close button, and Escape — so a dismissed preview can never wedge
     // future generations.

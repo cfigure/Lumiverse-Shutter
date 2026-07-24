@@ -185,7 +185,7 @@ export function createSettingsPanel(deps: {
     iconRow.controlSlot.appendChild(selectIconTheme)
 
     // Generation History (parent)
-    const historyRow = makeRow('Generation History', 'Browse every version generated with Regenerate Image in the result modal. Insert or regenerate any of them — a new generation or Rebuild Prompt starts a fresh set.')
+    const historyRow = makeRow('Generation History', 'Keep images from the current prompt together in the Generate Image modal so you can browse and reuse them.')
     container.appendChild(historyRow.row)
     const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
       checked: s.generationHistory,
@@ -195,10 +195,10 @@ export function createSettingsPanel(deps: {
       },
     })
 
-    // Gesture Navigation (child — hidden while Generation History is off).
+    // Swipe & Keyboard Navigation (child — hidden while Generation History is off).
     // Gates input channels only (touch + arrow keys), matching native's
     // swipeGesturesEnabled: the pill chevrons work regardless.
-    const gestureNavRow = makeRow('Gesture Navigation', 'Browse versions with touch swipes (mobile) or arrow keys (desktop).')
+    const gestureNavRow = makeRow('Swipe & Keyboard Navigation', 'Navigate generation history with swipes on mobile or arrow keys on desktop.')
     container.appendChild(gestureNavRow.row)
     rowGestureNavigation = gestureNavRow.row
     const gestureNavigation = ctx.components.mountSwitch(gestureNavRow.controlSlot, {

@@ -13,7 +13,7 @@ Shutter adds a floating widget and input bar action for triggering Lumiverse's n
 | **Preview only** or **Set as background** | Shutter handles the result against the newest message. It can ask whether to insert the image or insert it automatically, and can append or replace the latest Shutter image. Shutter does not set an active background, so **Preview only** is recommended for Shutter workflows. |
 | **Insert into chat** or **Attach to last message** | Native ImageGen handles placement. Shutter does not insert the result, and auto-generate is skipped in these modes. |
 
-When Shutter shows the **Generate Image** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** keeps results from the current prompt together so you can browse and reuse them. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
+When Shutter shows the **Image Generated** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** lets you browse and reuse every image generated for the current prompt. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
 
 Long-press or right-click the floating widget to open actions for the newest message: **Append**, **Replace**, **Force Generate**, **View Prompt**, **Remove**, and **Remove All**. **Force Generate** appears only when native scene-change detection could otherwise skip the request.
 
@@ -51,7 +51,7 @@ These settings apply only when Shutter handles placement. They do not affect **I
 |---|---|
 | **After Generation** | Ask to insert or insert automatically after a manual generation. |
 | **Default Widget Action** | Append a new image or replace the latest Shutter image. |
-| **Generation History** | Keep images from the current prompt together in the Generate Image modal so you can browse and reuse them. |
+| **Generation History** | Browse and reuse every image generated for the current prompt in the Image Generated modal. |
 | **Swipe & Keyboard Navigation** | Navigate generation history with swipes on mobile or arrow keys on desktop. |
 | **Show Prompt in Lightbox** | Add a Prompt pill with Copy and View actions to Shutter images opened in Lumiverse's native image viewer. |
 | **Shutter Image Layout** | Leave Shutter image styling alone or enable scoped custom layout controls. |

@@ -92,7 +92,6 @@ export function createModals(deps: {
   // would share one key and swipes/new messages would inherit stale images.
 
   type GenHistoryEntry = { imageId: string; imageUrl: string; prompt: string; negativePrompt: string }
-  const GEN_HISTORY_CAP = 10
   let genSession: GenHistoryEntry[] = []
 
   function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false, continueHistory = false) {
@@ -114,7 +113,6 @@ export function createModals(deps: {
     const history = genSession
     if (history[history.length - 1]?.imageId !== imageId) {
       history.push({ imageId, imageUrl, prompt, negativePrompt })
-      if (history.length > GEN_HISTORY_CAP) history.shift()
     }
     let idx = history.length - 1
     const current = () => history[idx]!

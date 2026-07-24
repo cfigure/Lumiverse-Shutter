@@ -52,40 +52,51 @@ export function createModals(deps: {
   }
 
   // Spindle modals are visually foregrounded, but Lumiverse's global chat
-  // navigation does not treat them as native active modals. Isolate arrows
-  // and touch gestures at the modal root so background chat navigation cannot
-  // react. Editable controls keep their native caret/selection behaviour.
-  function isolateModalInput(modal: { root: HTMLElement; dismiss(): void; onDismiss(callback: () => void): void }) {
-    const arrowBlocker = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  // navigation does not treat them as native active modals. Arrow keys must
+  // be isolated at window capture: when no modal control is focused, the key
+  // event targets the page and never passes through modal.root. Touch events
+  // originate inside the modal, so root-level propagation blocking remains
+  // appropriate. Editable controls keep their native caret behaviour because
+  // their arrow-key default is not prevented.
+  function isolateModalInput(
+    modal: { root: HTMLElement; dismiss(): void; onDismiss(callback: () => void): void },
+    options: { blockArrows?: boolean } = {},
+  ) {
+    const blockArrows = options.blockArrows !== false
+    const keyBlocker = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // The preview lightbox is the foreground surface and owns Escape.
+        if (activeLightbox) return
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        modal.dismiss()
+        return
+      }
+
+      if (!blockArrows || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (!isEditableTarget(e.target)) e.preventDefault()
-      e.stopPropagation()
+      // Capture at window so Lumiverse's document-level chat navigation never
+      // sees the key. Not preventing default for editable targets preserves
+      // normal caret/selection movement.
+      e.stopImmediatePropagation()
     }
     const touchBlocker = (e: TouchEvent) => {
       e.stopPropagation()
     }
-    const escapeHandler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || activeLightbox) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      modal.dismiss()
-    }
 
-    modal.root.addEventListener('keydown', arrowBlocker)
     modal.root.addEventListener('touchstart', touchBlocker)
     modal.root.addEventListener('touchmove', touchBlocker)
     modal.root.addEventListener('touchend', touchBlocker)
     modal.root.addEventListener('touchcancel', touchBlocker)
-    window.addEventListener('keydown', escapeHandler, { capture: true })
+    window.addEventListener('keydown', keyBlocker, { capture: true })
 
     modal.onDismiss(() => {
-      modal.root.removeEventListener('keydown', arrowBlocker)
       modal.root.removeEventListener('touchstart', touchBlocker)
       modal.root.removeEventListener('touchmove', touchBlocker)
       modal.root.removeEventListener('touchend', touchBlocker)
       modal.root.removeEventListener('touchcancel', touchBlocker)
-      window.removeEventListener('keydown', escapeHandler, { capture: true })
+      window.removeEventListener('keydown', keyBlocker, { capture: true })
     })
   }
 
@@ -185,7 +196,10 @@ export function createModals(deps: {
     const current = () => history[idx]!
 
     const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
-    isolateModalInput(modal)
+    // The existing window-capture history handler owns arrows while gesture
+    // navigation is enabled. Otherwise isolateModalInput consumes them so
+    // they cannot reach the background chat.
+    isolateModalInput(modal, { blockArrows: !gestureEnabled })
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 

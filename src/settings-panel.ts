@@ -185,7 +185,7 @@ export function createSettingsPanel(deps: {
     iconRow.controlSlot.appendChild(selectIconTheme)
 
     // Generation History (parent)
-    const historyRow = makeRow('Generation History', 'Keep images from the current prompt together in the Generate Image modal so you can browse and reuse them.')
+    const historyRow = makeRow('Generation History', 'Browse and reuse every image generated for the current prompt in the Image Generated modal.')
     container.appendChild(historyRow.row)
     const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
       checked: s.generationHistory,

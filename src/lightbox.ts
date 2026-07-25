@@ -519,10 +519,10 @@ export function createLightboxPromptLabel(deps: {
         <div class="sh-lightbox-prompt-heading">
           <span class="sh-lightbox-prompt-status"><span class="sh-lightbox-prompt-spinner-slot" aria-hidden="true"></span><span>Reading prompt…</span></span>
           <span class="sh-lightbox-prompt-actions">
-            <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>View History</button>
-            <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View Prompt</button>
+            <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>History</button>
+            <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>Prompt</button>
             <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
-            <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy Prompt</button>
+            <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
         </div>
@@ -995,12 +995,12 @@ export function createLightboxPromptLabel(deps: {
         copyBtn.classList.add('sh-copied')
         setTimeout(() => {
           if (!copyBtn.isConnected) return
-          copyBtn.textContent = 'Copy Prompt'
+          copyBtn.textContent = 'Copy'
           copyBtn.classList.remove('sh-copied')
         }, 2000)
       }).catch(() => {
         copyBtn.textContent = 'Failed'
-        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
       })
     })
 
@@ -1070,8 +1070,8 @@ export function createLightboxPromptLabel(deps: {
       historyBtn.hidden = resolved.history.length === 0
       historyBtn.disabled = resolved.history.length === 0
       historyBtn.textContent = resolved.history.length > 0
-        ? `View History · ${resolved.history.length}`
-        : 'View History'
+        ? `History · ${resolved.history.length}`
+        : 'History'
     }
     if (viewBtn) {
       viewBtn.hidden = false

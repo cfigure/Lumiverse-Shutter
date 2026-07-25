@@ -1,87 +1,119 @@
-// Spindle message-channel round-trips: request/response pairs over
-// ctx.sendToBackend / ctx.onBackendMessage, correlated by requestId with a
-// timeout fallback. This is the plumbing seam shared by the lightbox prompt
-// label, the View Prompt modal, and callImageGen's attach-target resolution —
-// it lives here (not in any one feature module) so no feature falsely owns it.
-//
-// The entry file owns the single ctx.onBackendMessage subscription and calls
-// handleBackendMessage first; payloads it consumes (the round-trip replies)
-// return true, everything else (e.g. 'settings') falls through to the entry's
-// own handling.
+// Spindle message-channel round-trips, correlated by requestId with timeout
+// fallbacks. The entry owns the single ctx.onBackendMessage subscription.
 
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { ShutterTag } from './metadata'
+import type {
+  GenerationHistoryInput,
+  GenerationHistoryRecord,
+  GenerationTarget,
+} from './history'
 
 export type Comms = ReturnType<typeof createComms>
 
+type PendingRequest = {
+  kind: 'target' | 'tag' | 'history' | 'record' | 'clear'
+  resolve: (value: any) => void
+  timeout: ReturnType<typeof setTimeout>
+}
+
 export function createComms(ctx: SpindleFrontendContext) {
-  const pendingLastMessageRequests = new Map<string, { resolve: (value: string | undefined) => void; timeout: ReturnType<typeof setTimeout> }>()
-  const pendingTagRequests = new Map<string, { resolve: (t: ShutterTag | null) => void; timeout: ReturnType<typeof setTimeout> }>()
+  const pending = new Map<string, PendingRequest>()
 
-  async function resolveLastMessageId(chatId: string): Promise<string | undefined> {
-    const requestId = `last-message-${Date.now()}-${Math.random().toString(36).slice(2)}`
-
+  function request<T>(
+    kind: PendingRequest['kind'],
+    type: string,
+    payload: Record<string, unknown>,
+    fallback: T,
+    timeoutMs = 5000,
+  ): Promise<T> {
+    const requestId = `${type}-${Date.now()}-${Math.random().toString(36).slice(2)}`
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        pendingLastMessageRequests.delete(requestId)
-        resolve(undefined)
-      }, 5000)
-
-      pendingLastMessageRequests.set(requestId, { resolve, timeout })
-      ctx.sendToBackend({ type: 'resolve_last_message_id', requestId, chatId })
+        pending.delete(requestId)
+        resolve(fallback)
+      }, timeoutMs)
+      pending.set(requestId, { kind, resolve, timeout })
+      ctx.sendToBackend({ type, requestId, ...payload })
     })
   }
 
+  function resolveGenerationTarget(chatId: string, messageId: string): Promise<GenerationTarget | null> {
+    return request('target', 'resolve_generation_target', { chatId, messageId }, null)
+  }
+
   function resolveShutterTag(chatId: string, messageId: string, index: number): Promise<ShutterTag | null> {
-    const requestId = `shutter-tag-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        pendingTagRequests.delete(requestId)
-        resolve(null)
-      }, 4000)
-      pendingTagRequests.set(requestId, { resolve, timeout })
-      ctx.sendToBackend({ type: 'resolve_shutter_tag', requestId, chatId, messageId, index })
-    })
+    return request('tag', 'resolve_shutter_tag', { chatId, messageId, index }, null, 4000)
+  }
+
+  function appendGenerationHistory(
+    target: GenerationTarget,
+    entry: GenerationHistoryInput,
+  ): Promise<GenerationHistoryRecord[]> {
+    return request('history', 'append_generation_history', { target, entry }, [])
+  }
+
+  function getGenerationHistory(target: GenerationTarget): Promise<GenerationHistoryRecord[]> {
+    return request('history', 'get_generation_history', { target }, [])
+  }
+
+  function getGenerationRecord(imageId: string): Promise<GenerationHistoryRecord | null> {
+    return request('record', 'get_generation_record', { imageId }, null)
+  }
+
+  function clearGenerationHistory(): Promise<boolean> {
+    return request('clear', 'clear_generation_history', {}, false, 15000)
   }
 
   // Returns true when the payload was a comms round-trip reply (consumed).
   function handleBackendMessage(payload: any): boolean {
-    if (payload.type === 'last_message_id') {
-      const pending = pendingLastMessageRequests.get(payload.requestId)
-      if (!pending) return true
-      clearTimeout(pending.timeout)
-      pendingLastMessageRequests.delete(payload.requestId)
-      pending.resolve(typeof payload.messageId === 'string' ? payload.messageId : undefined)
-      return true
-    }
+    if (!payload || typeof payload.requestId !== 'string') return false
+    const entry = pending.get(payload.requestId)
+    if (!entry) return false
 
-    if (payload.type === 'shutter_tag') {
-      const pending = pendingTagRequests.get(payload.requestId)
-      if (!pending) return true
-      clearTimeout(pending.timeout)
-      pendingTagRequests.delete(payload.requestId)
-      pending.resolve(payload.imageId && payload.path ? { imageId: payload.imageId, path: payload.path } : null)
-      return true
-    }
+    const matches =
+      (payload.type === 'generation_target' && entry.kind === 'target')
+      || (payload.type === 'shutter_tag' && entry.kind === 'tag')
+      || (payload.type === 'generation_history' && entry.kind === 'history')
+      || (payload.type === 'generation_record' && entry.kind === 'record')
+      || (payload.type === 'history_cleared' && entry.kind === 'clear')
+    if (!matches) return false
 
-    return false
+    clearTimeout(entry.timeout)
+    pending.delete(payload.requestId)
+
+    if (payload.type === 'generation_target') {
+      entry.resolve(payload.target ?? null)
+    } else if (payload.type === 'shutter_tag') {
+      entry.resolve(payload.imageId && payload.path ? { imageId: payload.imageId, path: payload.path } : null)
+    } else if (payload.type === 'generation_history') {
+      entry.resolve(Array.isArray(payload.history) ? payload.history : [])
+    } else if (payload.type === 'generation_record') {
+      entry.resolve(payload.record ?? null)
+    } else {
+      entry.resolve(true)
+    }
+    return true
   }
 
-  // Teardown mirrors the original cleanup exactly: tag requests only have
-  // their timeouts cleared (their promises are abandoned with the session),
-  // while last-message requests are resolved undefined so any await in a
-  // still-running callImageGen can complete.
   function dispose(): void {
-    for (const [, pending] of pendingTagRequests) {
-      clearTimeout(pending.timeout)
-    }
-    pendingTagRequests.clear()
-    for (const [requestId, pending] of pendingLastMessageRequests) {
-      clearTimeout(pending.timeout)
-      pending.resolve(undefined)
-      pendingLastMessageRequests.delete(requestId)
+    for (const [requestId, entry] of pending) {
+      clearTimeout(entry.timeout)
+      if (entry.kind === 'history') entry.resolve([])
+      else if (entry.kind === 'clear') entry.resolve(false)
+      else entry.resolve(null)
+      pending.delete(requestId)
     }
   }
 
-  return { resolveLastMessageId, resolveShutterTag, handleBackendMessage, dispose }
+  return {
+    resolveGenerationTarget,
+    resolveShutterTag,
+    appendGenerationHistory,
+    getGenerationHistory,
+    getGenerationRecord,
+    clearGenerationHistory,
+    handleBackendMessage,
+    dispose,
+  }
 }

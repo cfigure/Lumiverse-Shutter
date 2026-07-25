@@ -17,6 +17,7 @@ export function createSettingsPanel(deps: {
   ctx: SpindleFrontendContext
   updateSettings: (patch: Partial<Settings>) => void
   hasPermission: (permission: string) => boolean
+  clearGenerationHistory: () => Promise<boolean>
 }) {
   const { ctx } = deps
 
@@ -185,7 +186,7 @@ export function createSettingsPanel(deps: {
     iconRow.controlSlot.appendChild(selectIconTheme)
 
     // Generation History (parent)
-    const historyRow = makeRow('Generation History', 'Browse and reuse every image generated for the current prompt in the Image Generated modal.')
+    const historyRow = makeRow('Generation History', 'Save and sync generated images and their submitted prompts for each message response.')
     container.appendChild(historyRow.row)
     const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
       checked: s.generationHistory,
@@ -205,6 +206,44 @@ export function createSettingsPanel(deps: {
       checked: s.gestureNavigation,
       onChange: (on: boolean) => deps.updateSettings({ gestureNavigation: on }),
     })
+
+    // Destructive history action. Disabling Generation History only stops new
+    // records; it never silently deletes existing cross-device history.
+    const clearHistoryRow = makeRow(
+      'Clear Generation History',
+      'Remove saved prompts and history associations from this account. Generated images and message content are not deleted.',
+    )
+    container.appendChild(clearHistoryRow.row)
+    const clearHistoryBtn = document.createElement('button')
+    clearHistoryBtn.type = 'button'
+    clearHistoryBtn.className = 'sh-settings-danger-btn'
+    clearHistoryBtn.textContent = 'Clear History…'
+    clearHistoryBtn.addEventListener('click', async () => {
+      const { confirmed } = await ctx.ui.showConfirm({
+        title: 'Clear Generation History',
+        message: 'Delete all saved Shutter generation history across every chat and synced device? Generated images and images already inserted into messages will not be deleted.',
+        variant: 'danger',
+        confirmLabel: 'Clear History',
+        cancelLabel: 'Cancel',
+      })
+      if (!confirmed) return
+
+      clearHistoryBtn.disabled = true
+      clearHistoryBtn.textContent = 'Clearing…'
+      const cleared = await deps.clearGenerationHistory()
+      if (!clearHistoryBtn.isConnected) return
+      clearHistoryBtn.disabled = false
+      clearHistoryBtn.textContent = cleared ? 'Cleared' : 'Try Again'
+      ctx.sendToBackend({
+        type: 'show_toast',
+        level: cleared ? 'success' : 'error',
+        message: cleared ? 'Shutter generation history cleared.' : 'Generation history could not be cleared.',
+      })
+      setTimeout(() => {
+        if (clearHistoryBtn.isConnected) clearHistoryBtn.textContent = 'Clear History…'
+      }, 1800)
+    })
+    clearHistoryRow.controlSlot.appendChild(clearHistoryBtn)
 
     // Toast on Insert
     const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.')
@@ -279,7 +318,7 @@ export function createSettingsPanel(deps: {
     const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
     const lightboxPromptRow = makeRow(
       'Show Prompt in Lightbox',
-      'Show the generation prompt below Shutter images opened in the native image viewer. Reads provider metadata from Shutter-tagged images and does not store prompt history.',
+      'Show prompt metadata below Shutter images opened in the native image viewer. Saved Shutter data is preferred, with embedded image metadata available when present.',
     )
     container.appendChild(lightboxPromptRow.row)
     const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {

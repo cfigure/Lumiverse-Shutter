@@ -6,6 +6,7 @@ import { createComms } from './comms'
 import { createLightboxPromptLabel } from './lightbox'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
+import type { GenerationHistoryRecord, GenerationOrigin, GenerationTarget } from './history'
 
 // ── Types ──
 
@@ -15,6 +16,7 @@ export type GenerationResult = {
   handledByNative: boolean
   prompt: string
   negativePrompt: string
+  promptMode: string
 }
 
 // Native ImageGen returns { generated: false, reason } when the scene hasn't
@@ -236,6 +238,7 @@ export function setup(ctx: SpindleFrontendContext) {
     ctx,
     updateSettings,
     hasPermission: (p) => grantedPermissions.has(p),
+    clearGenerationHistory: () => comms.clearGenerationHistory(),
   })
 
   // ── Native ImageGen ──
@@ -266,22 +269,23 @@ export function setup(ctx: SpindleFrontendContext) {
   // (spindle.imageGen is the connection-profile API, a different pipeline),
   // and they authenticate via the user's browser session, which the backend
   // subprocess does not have.
-  async function callImageGen(chatId: string, overrides?: Record<string, any>): Promise<GenerationResult | GenerationSkipped> {
+  async function callImageGen(
+    chatId: string,
+    overrides?: Record<string, any>,
+    target?: GenerationTarget,
+  ): Promise<GenerationResult | GenerationSkipped> {
     const native = await fetchNativeSettings()
-    // No forceGeneration override (removed in 1.0.6): the ...native spread
-    // carries the user's native forceGeneration setting (UI label: "Ignore
-    // Scene Change Detection"), and the server ORs the request flag with its
-    // own stored setting anyway, so generation follows the native ImageGen
-    // panel exactly.
     const body: Record<string, any> = {
       ...native,
       ...overrides,
       chatId,
     }
 
-    if (body.outputTarget === 'attach_to_message' && !body.attachToMessageId) {
-      const lastId = await comms.resolveLastMessageId(chatId)
-      if (lastId) body.attachToMessageId = lastId
+    // Pin native attach-to-message mode to the same response that owns the
+    // Shutter history. This prevents a new trailing message from retargeting
+    // an in-flight generation.
+    if (body.outputTarget === 'attach_to_message' && target) {
+      body.attachToMessageId = target.messageId
     }
 
     const resp = await fetch('/api/v1/image-gen/generate', {
@@ -301,6 +305,7 @@ export function setup(ctx: SpindleFrontendContext) {
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
       negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
+      promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
     }
   }
 
@@ -328,11 +333,17 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Lightbox prompt label (1.0.6) ── moved whole to lightbox.ts
 
+  // The lightbox is constructed before the modal factory below. Keep a tiny
+  // indirection so its expanded View History action can open the shared
+  // history viewer without changing the compact mobile pill or construction
+  // order.
+  let openHistoryFromLightbox: (records: GenerationHistoryRecord[], imageId: string) => void = () => {}
   const lightboxPromptLabel = createLightboxPromptLabel({
     ctx,
     comms,
     getSettings: () => settings,
     hasPermission: (p) => grantedPermissions.has(p),
+    openHistory: (records, imageId) => openHistoryFromLightbox(records, imageId),
   })
 
   // ── Post-generation handling ──
@@ -352,23 +363,57 @@ export function setup(ctx: SpindleFrontendContext) {
     updateFloatBtnState()
   }
 
-  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace = false, continueHistory = false) {
+  async function handleGenerationResult(
+    result: GenerationResult,
+    target: GenerationTarget,
+    isAuto: boolean,
+    replace = false,
+    origin: GenerationOrigin = isAuto ? 'auto' : 'manual',
+  ): Promise<void> {
     setGeneratingState(false)
     resetAutoGenCounter()
 
+    let history: GenerationHistoryRecord[] = []
+    if (settings?.generationHistory) {
+      history = await comms.appendGenerationHistory(target, {
+        imageId: result.imageId,
+        prompt: result.prompt,
+        negativePrompt: result.negativePrompt,
+        promptMode: result.promptMode,
+        origin,
+      })
+    }
+
+    // Native output modes own their own UI/insertion, but their successful
+    // generations are still useful to Prompt View and cross-device history.
     if (result.handledByNative) return
 
     const afterAction = isAuto ? settings?.autoGenerateAfter : settings?.afterGenerate
     if (afterAction === 'auto_insert') {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId, replace })
+      ctx.sendToBackend({
+        type: 'insert_into_message',
+        imageId: result.imageId,
+        messageId: target.messageId,
+        chatId: target.chatId,
+        target,
+        replace,
+      })
     } else {
-      modals.openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto, replace, continueHistory)
+      modals.openDestinationModal(result, target, isAuto, replace, history)
     }
   }
 
   // ── Generate ──
 
-  async function triggerGenerate(messageId?: string, chatId?: string, isAuto = false, replace = false, force = false) {
+  async function triggerGenerate(
+    messageId?: string,
+    chatId?: string,
+    isAuto = false,
+    replace = false,
+    force = false,
+    pinnedTarget?: GenerationTarget,
+    origin: GenerationOrigin = isAuto ? 'auto' : 'manual',
+  ) {
     if (generating || modals.isPromptPreviewOpen()) return
 
     if (!chatId) {
@@ -380,19 +425,15 @@ export function setup(ctx: SpindleFrontendContext) {
     setGeneratingState(true)
 
     try {
+      const target = pinnedTarget ?? await comms.resolveGenerationTarget(chatId, messageId || '__last__')
+      if (!target) throw new Error('No message response is available for this generation.')
+
       const native = await fetchNativeSettings()
       const outputTarget = native.outputTarget || 'background'
 
-      if (isAuto) {
-        // Shutter's automation only owns inline/manual insertion. If native
-        // ImageGen is configured to insert into chat or attach to the last
-        // message, let the native path handle that mode instead. Do not skip
-        // merely because native Auto-Generate is enabled: many users leave
-        // that setting on while using Shutter for inline/background automation.
-        if (outputTarget === 'chat_attachment' || outputTarget === 'attach_to_message') {
-          setGeneratingState(false)
-          return
-        }
+      if (isAuto && (outputTarget === 'chat_attachment' || outputTarget === 'attach_to_message')) {
+        setGeneratingState(false)
+        return
       }
 
       const showPreview = native.previewPromptBeforeGenerate
@@ -401,38 +442,24 @@ export function setup(ctx: SpindleFrontendContext) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId, isAuto, replace)
+          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin)
         } catch (err: any) {
           setGeneratingState(false)
           if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))
         }
         return
       }
-      
-      // '__last__' is resolved backend-side at execution time, never earlier.
-      // Do not pre-resolve to a concrete ID in the frontend; see the design
-      // note above resolveTarget() in backend.ts.
-      //
-      // `force` is a per-press override from the advanced menu ("Force
-      // Generate"), mirroring native's Force Generate button. It is not
-      // threaded into the prompt-preview path above because that path's
-      // Generate uses skipParse (custom prompt mode server-side), which
-      // never runs the scene gate — it is effectively always forced.
-      const result = await callImageGen(chatId, force ? { forceGeneration: true } : undefined)
+
+      const result = await callImageGen(chatId, force ? { forceGeneration: true } : undefined, target)
       if ('skipped' in result) {
-        // Deliberately does NOT reset the auto-gen counter: a skipped auto
-        // attempt should retry on the next AI message, when the scene may
-        // have changed. Auto skips are silent, matching error suppression.
         setGeneratingState(false)
         if (!isAuto) notifyGenerationSkipped(result.reason)
         return
       }
-      handleGenerationResult(result, messageId || '__last__', chatId, isAuto, replace)
+      await handleGenerationResult(result, target, isAuto, replace, origin)
     } catch (err: any) {
       setGeneratingState(false)
-      if (!isAuto) {
-        modals.showErrorModal(parseErrorMessage(err.message))
-      }
+      if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))
     }
   }
 
@@ -690,12 +717,19 @@ export function setup(ctx: SpindleFrontendContext) {
     notifyGenerationSkipped,
     parseErrorMessage,
   })
+  openHistoryFromLightbox = (records, imageId) => modals.openHistoryViewer(records, imageId)
 
   // ── Backend messages ──
 
   const unsubBackend = ctx.onBackendMessage((payload: any) => {
-    // Round-trip replies (last_message_id, shutter_tag) are consumed by comms.
+    // Round-trip replies are consumed by comms.
     if (comms.handleBackendMessage(payload)) return
+
+    if (payload.type === 'generation_history_cleared') {
+      lightboxPromptLabel.onHistoryCleared()
+      modals.onHistoryCleared()
+      return
+    }
 
     if (payload.type !== 'settings') return
 

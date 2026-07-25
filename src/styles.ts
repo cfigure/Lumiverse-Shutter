@@ -30,6 +30,24 @@ export const SHUTTER_CSS = `
     .sh-setting-control { flex-shrink: 0; }
     .sh-settings-divider { border-top: 1px solid var(--lumiverse-border); margin: 10px 0 8px; }
     .sh-settings-note { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); line-height: 1.45; margin: 0 0 6px; }
+    .sh-settings-danger-btn {
+      flex-shrink: 0;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #e55) 45%, var(--lumiverse-border));
+      background: color-mix(in srgb, var(--lumiverse-danger, #e55) 10%, transparent);
+      color: var(--lumiverse-danger, #e55);
+      font: inherit;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+    }
+    .sh-settings-danger-btn:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--lumiverse-danger, #e55) 18%, transparent);
+      border-color: var(--lumiverse-danger, #e55);
+    }
+    .sh-settings-danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .sh-auto-section { margin-top: 10px; }
     .sh-range-row { display: flex; align-items: center; gap: 6px; }
     .sh-range-label { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); }
@@ -157,6 +175,64 @@ export const SHUTTER_CSS = `
       font-size: calc(13px * var(--lumiverse-font-scale, 1));
       font-style: italic;
       padding: 8px 0;
+    }
+
+    /* One-source-at-a-time prompt metadata selector. In the compact native
+       lightbox pill this content is hidden with the rest of the body, so the
+       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile. */
+    .sh-prompt-source-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px;
+      padding: 3px;
+      margin-bottom: 10px;
+      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+      border-radius: var(--lcs-radius-sm, 8px);
+      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04));
+    }
+    .sh-prompt-source-btn {
+      min-width: 0;
+      padding: 6px 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--lumiverse-text-muted, #999);
+      font: inherit;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+    }
+    .sh-prompt-source-btn:hover { color: var(--lumiverse-text, #eee); }
+    .sh-prompt-source-btn.sh-active {
+      background: var(--lumiverse-fill-heavy, rgba(255,255,255,0.1));
+      color: var(--lumiverse-text, #eee);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.16);
+    }
+    .sh-prompt-source-meta {
+      margin-bottom: 8px;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.4;
+    }
+    .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
+    .sh-prompt-history-btn {
+      width: 100%;
+      margin-top: 12px;
+      padding: 8px 10px;
+      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.1));
+      border-radius: var(--lcs-radius-sm, 8px);
+      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.05));
+      color: var(--lumiverse-text, #eee);
+      font: inherit;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+    }
+    .sh-prompt-history-btn:hover {
+      background: var(--lumiverse-fill-medium, rgba(255,255,255,0.09));
+      border-color: var(--lumiverse-border-strong, rgba(255,255,255,0.18));
     }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the

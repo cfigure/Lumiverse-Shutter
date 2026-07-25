@@ -1,14 +1,24 @@
 declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 
 import { DEFAULT_SETTINGS, validateSettings, type Settings } from './settings'
+import {
+  fingerprintSwipeContent,
+  type GenerationHistoryInput,
+  type GenerationHistoryRecord,
+  type GenerationTarget,
+} from './history'
 
 // ── Types ──
 
 type FrontendMessage =
   | { type: 'request_settings' }
   | { type: 'update_settings'; settings: Partial<Settings> }
-  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; replace?: boolean }
-  | { type: 'resolve_last_message_id'; requestId: string; chatId: string }
+  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; target?: GenerationTarget; replace?: boolean }
+  | { type: 'resolve_generation_target'; requestId: string; chatId: string; messageId: string }
+  | { type: 'append_generation_history'; requestId: string; target: GenerationTarget; entry: GenerationHistoryInput }
+  | { type: 'get_generation_history'; requestId: string; target: GenerationTarget }
+  | { type: 'get_generation_record'; requestId: string; imageId: string }
+  | { type: 'clear_generation_history'; requestId: string }
   | { type: 'delete_image'; messageId: string; chatId: string }
   | { type: 'delete_all_images'; messageId: string; chatId: string }
   | { type: 'show_toast'; level: 'info' | 'success' | 'warning' | 'error'; message: string }
@@ -43,6 +53,202 @@ void loadSettings()
     )
   })
 
+// ── Durable generation history ──
+
+const HISTORY_PREFIX = 'history/v1'
+const HISTORY_STATE_PATH = `${HISTORY_PREFIX}/state.json`
+
+type HistoryState = { version: 1; epoch: number }
+
+type GenerationHistoryPointer = {
+  version: 1
+  imageId: string
+  createdAt: number
+  recordPath: string
+}
+
+function safePathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function historyEpochPrefix(epoch: number): string {
+  return `${HISTORY_PREFIX}/epochs/${epoch}/`
+}
+
+function historyTargetPrefix(target: Pick<GenerationTarget, 'chatId' | 'messageId' | 'historyEpoch'>): string {
+  return `${historyEpochPrefix(target.historyEpoch)}targets/${safePathSegment(target.chatId)}/${safePathSegment(target.messageId)}/`
+}
+
+function historyTargetRecordPath(record: GenerationHistoryRecord): string {
+  return `${historyTargetPrefix(record.target)}${record.createdAt}-${safePathSegment(record.imageId)}.json`
+}
+
+function historyImageRecordPath(imageId: string, epoch: number): string {
+  return `${historyEpochPrefix(epoch)}records/${safePathSegment(imageId)}.json`
+}
+
+async function loadHistoryState(userId?: string): Promise<HistoryState> {
+  const state = await spindle.userStorage.getJson(HISTORY_STATE_PATH, {
+    fallback: { version: 1, epoch: 1 } as HistoryState,
+    userId,
+  }) as HistoryState
+  const epoch = Number.isFinite(state?.epoch) && state.epoch > 0 ? Math.floor(state.epoch) : 1
+  return { version: 1, epoch }
+}
+
+function isHistoryRecord(value: unknown): value is GenerationHistoryRecord {
+  const record = value as GenerationHistoryRecord | null
+  return !!record
+    && record.version === 1
+    && typeof record.imageId === 'string'
+    && typeof record.createdAt === 'number'
+    && typeof record.prompt === 'string'
+    && typeof record.negativePrompt === 'string'
+    && typeof record.promptMode === 'string'
+    && !!record.target
+    && typeof record.target.chatId === 'string'
+    && typeof record.target.messageId === 'string'
+}
+
+function isHistoryPointer(value: unknown): value is GenerationHistoryPointer {
+  const pointer = value as GenerationHistoryPointer | null
+  return !!pointer
+    && pointer.version === 1
+    && typeof pointer.imageId === 'string'
+    && typeof pointer.createdAt === 'number'
+    && typeof pointer.recordPath === 'string'
+}
+
+function recordMatchesTarget(record: GenerationHistoryRecord, target: GenerationTarget): boolean {
+  if (record.target.historyEpoch !== target.historyEpoch) return false
+  if (record.target.chatId !== target.chatId || record.target.messageId !== target.messageId) return false
+
+  if (record.target.swipeDate !== null && target.swipeDate !== null) {
+    if (record.target.swipeDate !== target.swipeDate) return false
+    // Timestamps are normally unique. When either side observed a duplicate,
+    // use the stripped-content fingerprint to avoid merging two same-second swipes.
+    if (record.target.duplicateSwipeDate || target.duplicateSwipeDate) {
+      return record.target.swipeFingerprint === target.swipeFingerprint
+    }
+    return true
+  }
+
+  return record.target.swipeId === target.swipeId
+    && record.target.swipeFingerprint === target.swipeFingerprint
+}
+
+async function loadGenerationHistory(target: GenerationTarget, userId?: string): Promise<GenerationHistoryRecord[]> {
+  const state = await loadHistoryState(userId)
+  if (target.historyEpoch !== state.epoch) return []
+
+  const prefix = historyTargetPrefix(target)
+  const paths = await spindle.userStorage.list(prefix, userId)
+  const records: GenerationHistoryRecord[] = []
+  for (let offset = 0; offset < paths.length; offset += 32) {
+    const batch = await Promise.all(paths.slice(offset, offset + 32).map((relativePath: string) =>
+      spindle.userStorage.getJson(`${prefix}${relativePath}`, { fallback: null, userId }) as Promise<GenerationHistoryRecord | null>,
+    ))
+    for (const record of batch) {
+      if (isHistoryRecord(record) && recordMatchesTarget(record, target)) records.push(record)
+    }
+  }
+  records.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
+  return records
+}
+
+async function appendGenerationHistory(
+  target: GenerationTarget,
+  input: GenerationHistoryInput,
+  userId?: string,
+): Promise<GenerationHistoryRecord[]> {
+  const settings = await loadSettings(userId)
+  if (!settings.generationHistory) return []
+
+  const stateBefore = await loadHistoryState(userId)
+  if (target.historyEpoch !== stateBefore.epoch) return []
+
+  const canonicalPath = historyImageRecordPath(input.imageId, target.historyEpoch)
+  const existingPointer = await spindle.userStorage.getJson(canonicalPath, {
+    fallback: null,
+    userId,
+  }) as GenerationHistoryPointer | null
+  const existingRecord = isHistoryPointer(existingPointer)
+      && existingPointer.recordPath.startsWith(historyEpochPrefix(target.historyEpoch))
+    ? await spindle.userStorage.getJson(existingPointer.recordPath, { fallback: null, userId }) as GenerationHistoryRecord | null
+    : null
+
+  const record: GenerationHistoryRecord = isHistoryRecord(existingRecord)
+    ? existingRecord
+    : {
+        version: 1,
+        imageId: input.imageId,
+        createdAt: Date.now(),
+        prompt: input.prompt,
+        negativePrompt: input.negativePrompt,
+        promptMode: input.promptMode,
+        origin: input.origin,
+        target,
+      }
+
+  const targetPath = historyTargetRecordPath(record)
+  const pointer: GenerationHistoryPointer = {
+    version: 1,
+    imageId: record.imageId,
+    createdAt: record.createdAt,
+    recordPath: targetPath,
+  }
+  // Store the full prompt once. The image-ID index is a small pointer used by
+  // Prompt View, avoiding a second copy of every potentially long prompt.
+  await spindle.userStorage.setJson(targetPath, record, { indent: 2, userId })
+  await spindle.userStorage.setJson(canonicalPath, pointer, { indent: 2, userId })
+
+  // A clear can race an in-flight generation from another device. Re-check
+  // the epoch after writing and remove the stale files if the clear won.
+  const stateAfter = await loadHistoryState(userId)
+  if (stateAfter.epoch !== target.historyEpoch) {
+    await spindle.userStorage.delete(canonicalPath, userId).catch(() => {})
+    await spindle.userStorage.delete(targetPath, userId).catch(() => {})
+    return []
+  }
+
+  return loadGenerationHistory(target, userId)
+}
+
+async function getGenerationRecord(imageId: string, userId?: string): Promise<GenerationHistoryRecord | null> {
+  const state = await loadHistoryState(userId)
+  const pointer = await spindle.userStorage.getJson(historyImageRecordPath(imageId, state.epoch), {
+    fallback: null,
+    userId,
+  }) as GenerationHistoryPointer | null
+  if (!isHistoryPointer(pointer) || !pointer.recordPath.startsWith(historyEpochPrefix(state.epoch))) return null
+  const record = await spindle.userStorage.getJson(pointer.recordPath, { fallback: null, userId }) as GenerationHistoryRecord | null
+  return isHistoryRecord(record) && record.target.historyEpoch === state.epoch ? record : null
+}
+
+async function clearGenerationHistory(userId?: string): Promise<void> {
+  const current = await loadHistoryState(userId)
+  const next: HistoryState = { version: 1, epoch: current.epoch + 1 }
+
+  // Publish the new epoch first. Any old in-flight generation now fails its
+  // post-write epoch check, while a genuinely new generation writes beneath
+  // the new epoch and is not swept by this clear operation.
+  await spindle.userStorage.setJson(HISTORY_STATE_PATH, next, { indent: 2, userId })
+  const epochsPrefix = `${HISTORY_PREFIX}/epochs/`
+  const paths = await spindle.userStorage.list(epochsPrefix, userId)
+  const stalePaths = paths.filter((relativePath: string) => {
+    const storedEpoch = Number.parseInt(relativePath.split('/')[0] ?? '', 10)
+    // Delete only epochs that existed before this clear began. A concurrent
+    // clear may already have advanced the state again; its newer epoch must
+    // never be swept by this operation.
+    return Number.isFinite(storedEpoch) && storedEpoch <= current.epoch
+  })
+  for (let offset = 0; offset < stalePaths.length; offset += 32) {
+    await Promise.all(stalePaths.slice(offset, offset + 32).map((relativePath: string) =>
+      spindle.userStorage.delete(`${epochsPrefix}${relativePath}`, userId).catch(() => {}),
+    ))
+  }
+}
+
 // ── Image manipulation ──
 // The 'Remove Image Tags from Context' setting controls whether these tags are stripped from
 // the prompt natively via the interceptor below. Shutter-regex-scripts.json is
@@ -66,12 +272,6 @@ function stripAllShutterImages(content: string): { content: string; count: numbe
 }
 
 // ── Image-tag context filtering (interceptor) ──
-//
-// Mirrors the legacy Shutter regex (target:prompt, ai_output): strip the
-// inline ![shutter](...) markdown from the assembled prompt so the model
-// never sees it, while the stored/displayed message keeps the image. Handles
-// both LlmMessageDTO content shapes — a plain string, or a parts array where
-// only text parts carry the markdown.
 
 type LlmMessage = import('lumiverse-spindle-types').LlmMessageDTO
 
@@ -82,7 +282,7 @@ function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
   }
   return {
     ...message,
-    content: content.map(part =>
+    content: content.map((part: any) =>
       part.type === 'text'
         ? { ...part, text: part.text.replace(SHUTTER_IMAGE_GLOBAL_RE, '') }
         : part,
@@ -91,15 +291,16 @@ function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
 }
 
 // ── Message resolution ──
-//
-// '__last__' = the literal newest message, any role, resolved at execution
-// time. Deliberate: do NOT retarget this to the last AI message. That was
-// tried and reverted. Last-AI lets Remove/Replace reach past a trailing
-// user message or a deletion and silently strip an older reply's image
-// (destructive, invisible). Literal-last's worst case is an image landing
-// on the user's own queued message (additive, visible, reversible).
-// Matches native ImageGen's attach-to-last (messages[length - 1]).
-type ShutterMessage = { id: string; content: string; role: string; index_in_chat: number }
+
+type ShutterMessage = {
+  id: string
+  content: string
+  role: string
+  index_in_chat: number
+  swipe_id: number
+  swipes: string[]
+  swipe_dates: number[]
+}
 
 function orderedMessages<T extends ShutterMessage>(messages: T[]): T[] {
   return [...messages].sort((a, b) => a.index_in_chat - b.index_in_chat)
@@ -115,13 +316,53 @@ function resolveTarget<T extends ShutterMessage>(messages: T[], messageId: strin
   return target ? { target } : { error: 'Message not found.' }
 }
 
+function buildGenerationTarget(chatId: string, message: ShutterMessage, historyEpoch: number): GenerationTarget {
+  const swipeId = Number.isFinite(message.swipe_id) ? message.swipe_id : 0
+  const swipeContent = message.swipes?.[swipeId] ?? message.content
+  const rawDate = message.swipe_dates?.[swipeId]
+  const swipeDate = Number.isFinite(rawDate) && rawDate > 0 ? rawDate : null
+  const duplicateSwipeDate = swipeDate !== null
+    && message.swipe_dates.filter(value => value === swipeDate).length > 1
+
+  return {
+    chatId,
+    messageId: message.id,
+    swipeId,
+    swipeDate,
+    swipeFingerprint: fingerprintSwipeContent(swipeContent),
+    duplicateSwipeDate,
+    historyEpoch,
+  }
+}
+
+function resolvePinnedSwipeIndex(message: ShutterMessage, target: GenerationTarget): number | null {
+  const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.content]
+  const dates = Array.isArray(message.swipe_dates) ? message.swipe_dates : []
+
+  if (target.swipeDate !== null) {
+    const candidates: number[] = []
+    for (let i = 0; i < dates.length; i++) if (dates[i] === target.swipeDate) candidates.push(i)
+    if (candidates.length === 1) return candidates[0]!
+    if (candidates.length > 1) {
+      const byFingerprint = candidates.filter(i => fingerprintSwipeContent(swipes[i] ?? '') === target.swipeFingerprint)
+      if (byFingerprint.length === 1) return byFingerprint[0]!
+    }
+  }
+
+  if (target.swipeId >= 0 && target.swipeId < swipes.length) {
+    const content = swipes[target.swipeId] ?? ''
+    if (fingerprintSwipeContent(content) === target.swipeFingerprint) return target.swipeId
+  }
+
+  return null
+}
+
 // ── Frontend messages ──
 
 spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
   const payload = raw as FrontendMessage
   try {
     switch (payload.type) {
-
       case 'request_settings': {
         const settings = await loadSettings(userId)
         liveSettings = settings
@@ -136,41 +377,71 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
         break
       }
 
-
       case 'show_toast': {
-        // Toasts are backend-only in the Spindle API (free tier, no
-        // permission), so the frontend routes its notifications through
-        // here — same pattern as insert confirmations. `userId` targets the
-        // sender: operator-scoped installs (Lumiverse's default for GitHub
-        // installs) broadcast to ALL users when it is omitted; user-scoped
-        // installs ignore it. Same option on every toast in this handler.
         spindle.toast[payload.level](payload.message, { userId })
         break
       }
 
+      case 'resolve_generation_target': {
+        if (!spindle.permissions.has('chat_mutation')) {
+          spindle.sendToFrontend({
+            type: 'generation_target',
+            requestId: payload.requestId,
+            target: null,
+            error: 'Grant the "Chat Mutation" permission to resolve chat messages.',
+          }, userId)
+          break
+        }
+        const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
+        const { target: message, error } = resolveTarget(messages, payload.messageId)
+        const state = await loadHistoryState(userId)
+        spindle.sendToFrontend({
+          type: 'generation_target',
+          requestId: payload.requestId,
+          target: message ? buildGenerationTarget(payload.chatId, message, state.epoch) : null,
+          error,
+        }, userId)
+        break
+      }
+
+      case 'append_generation_history': {
+        const history = await appendGenerationHistory(payload.target, payload.entry, userId)
+        spindle.sendToFrontend({ type: 'generation_history', requestId: payload.requestId, history }, userId)
+        break
+      }
+
+      case 'get_generation_history': {
+        const history = await loadGenerationHistory(payload.target, userId)
+        spindle.sendToFrontend({ type: 'generation_history', requestId: payload.requestId, history }, userId)
+        break
+      }
+
+      case 'get_generation_record': {
+        const record = await getGenerationRecord(payload.imageId, userId)
+        spindle.sendToFrontend({ type: 'generation_record', requestId: payload.requestId, record }, userId)
+        break
+      }
+
+      case 'clear_generation_history': {
+        await clearGenerationHistory(userId)
+        spindle.sendToFrontend({ type: 'history_cleared', requestId: payload.requestId }, userId)
+        spindle.sendToFrontend({ type: 'generation_history_cleared' }, userId)
+        break
+      }
+
       case 'resolve_shutter_tag': {
-        // Resolve the authoritative image identity for a Shutter image from
-        // the message markdown itself. Rendered/lightbox srcs can't be
-        // trusted: host builds may rewrite them to separate display records
-        // and thumbnail tiers, but the ![shutter](...) tag always carries
-        // the generation image ID and the original route (which serves
-        // unmodified provider bytes for metadata parsing). messageId
-        // supports '__last__' (same semantics as the mutation handlers) and
-        // a negative index counts from the end (-1 = newest tag) — used by
-        // the widget menu's View Prompt, which targets the last Shutter
-        // image of the last message without needing the rendered DOM.
         let imageId: string | null = null
         let path: string | null = null
         try {
           if (spindle.permissions.has('chat_mutation')) {
-            const messages = await spindle.chat.getMessages(payload.chatId)
+            const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
             const { target: message } = resolveTarget(messages, payload.messageId)
             if (message && typeof message.content === 'string') {
               const tagRe = new RegExp(String.raw`!\[shutter\]\((/api/v1/(?:images|image-gen/results)/([a-f0-9-]+))\)`, 'gi')
               const tags: Array<{ path: string; imageId: string }> = []
-              let m: RegExpExecArray | null
-              while ((m = tagRe.exec(message.content)) !== null) {
-                tags.push({ path: m[1], imageId: m[2] })
+              let match: RegExpExecArray | null
+              while ((match = tagRe.exec(message.content)) !== null) {
+                tags.push({ path: match[1]!, imageId: match[2]! })
               }
               const tag = payload.index < 0
                 ? (tags[tags.length + payload.index] ?? null)
@@ -184,38 +455,7 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
         } catch (err) {
           spindle.log.warn(`[lightbox] resolve_shutter_tag failed: ${err instanceof Error ? err.message : String(err)}`)
         }
-        spindle.sendToFrontend({
-          type: 'shutter_tag',
-          requestId: payload.requestId,
-          imageId,
-          path,
-        }, userId)
-        break
-      }
-
-      case 'resolve_last_message_id': {
-        if (!spindle.permissions.has('chat_mutation')) {
-          spindle.sendToFrontend({
-            type: 'last_message_id',
-            requestId: payload.requestId,
-            messageId: null,
-            error: 'Grant the "Chat Mutation" permission to resolve chat messages.',
-          }, userId)
-          return
-        }
-        
-        // Mirror native ImageGen's attach_to_message semantics: the literal
-        // last message in the chat, regardless of role (ImageGenPanel does
-        // messages[messages.length - 1] at click time).
-        const messages = await spindle.chat.getMessages(payload.chatId)
-        const ordered = orderedMessages(messages)
-        const last = ordered[ordered.length - 1]
-
-        spindle.sendToFrontend({
-          type: 'last_message_id',
-          requestId: payload.requestId,
-          messageId: last?.id ?? null,
-        }, userId)
+        spindle.sendToFrontend({ type: 'shutter_tag', requestId: payload.requestId, imageId, path }, userId)
         break
       }
 
@@ -225,18 +465,24 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           return
         }
 
-        const messages = await spindle.chat.getMessages(payload.chatId)
+        const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
+        const requestedId = payload.target?.messageId ?? payload.messageId
+        const { target: message, error } = resolveTarget(messages, requestedId)
+        if (!message) { spindle.toast.error(error || 'Message not found.', { userId }); return }
 
-        const { target, error } = resolveTarget(messages, payload.messageId)
-        if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
+        const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id
+        if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
+          spindle.toast.error('The message response used for this generation no longer exists.', { userId })
+          return
+        }
 
         const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
-        if (target.content.includes(imageUrl)) {
+        let baseContent = message.swipes[swipeIndex] ?? message.content
+        if (baseContent.includes(imageUrl)) {
           spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
           return
         }
 
-        let baseContent = target.content
         let didReplace = false
         if (payload.replace) {
           const stripped = stripLastShutterImage(baseContent)
@@ -244,8 +490,12 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           didReplace = stripped.found
         }
 
-        await spindle.chat.updateMessage(payload.chatId, target.id, {
-          content: baseContent + `\n\n![shutter](${imageUrl})`,
+        const swipes = [...message.swipes]
+        swipes[swipeIndex] = baseContent + `\n\n![shutter](${imageUrl})`
+        await spindle.chat.updateMessage(payload.chatId, message.id, {
+          swipes,
+          swipe_dates: [...message.swipe_dates],
+          swipe_id: message.swipe_id,
         })
 
         const settings = await loadSettings(userId)
@@ -260,22 +510,15 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId })
           return
         }
-
-        const messages = await spindle.chat.getMessages(payload.chatId)
-
+        const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
         const { target, error } = resolveTarget(messages, payload.messageId)
         if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
-
         const stripped = stripLastShutterImage(target.content)
         if (!stripped.found) {
           spindle.toast.warning('No Shutter image found in message.', { userId })
           return
         }
-
-        await spindle.chat.updateMessage(payload.chatId, target.id, {
-          content: stripped.content,
-        })
-
+        await spindle.chat.updateMessage(payload.chatId, target.id, { content: stripped.content })
         spindle.toast.success('Image removed from message.', { userId })
         break
       }
@@ -285,22 +528,15 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId })
           return
         }
-
-        const messages = await spindle.chat.getMessages(payload.chatId)
-
+        const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
         const { target, error } = resolveTarget(messages, payload.messageId)
         if (!target) { spindle.toast.error(error || 'Message not found.', { userId }); return }
-
         const stripped = stripAllShutterImages(target.content)
         if (stripped.count === 0) {
           spindle.toast.warning('No Shutter images found in message.', { userId })
           return
         }
-
-        await spindle.chat.updateMessage(payload.chatId, target.id, {
-          content: stripped.content,
-        })
-
+        await spindle.chat.updateMessage(payload.chatId, target.id, { content: stripped.content })
         spindle.toast.success(`Removed ${stripped.count} image${stripped.count > 1 ? 's' : ''} from message.`, { userId })
         break
       }
@@ -312,12 +548,7 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 })
 
 // ── Image-tag context interceptor ──
-//
-// Registered once at startup. Reads the live setting on every generation so
-// toggling 'Remove Image Tags from Context' takes effect on the next
-// message with no re-registration (the host exposes a single interceptor slot
-// per extension and no unregister handle to the sandbox). When enabled, strip
-// Shutter's inline image tags; when disabled, pass the prompt through untouched.
+
 let imageTagInterceptorRegistered = false
 
 function ensureImageTagInterceptor(): void {
@@ -334,7 +565,7 @@ function ensureImageTagInterceptor(): void {
 
 ensureImageTagInterceptor()
 
-spindle.permissions.onChanged(({ permission, granted }) => {
+spindle.permissions.onChanged(({ permission, granted }: { permission: string; granted: boolean }) => {
   if (permission !== 'interceptor') return
   if (granted) {
     ensureImageTagInterceptor()
@@ -344,7 +575,7 @@ spindle.permissions.onChanged(({ permission, granted }) => {
   }
 })
 
-spindle.permissions.onDenied(({ permission, operation }) => {
+spindle.permissions.onDenied(({ permission, operation }: { permission: string; operation: string }) => {
   if (permission !== 'interceptor' || operation !== 'registerInterceptor') return
   imageTagInterceptorRegistered = false
   spindle.log.warn('[context-tags] Image-tag interceptor registration was denied.')

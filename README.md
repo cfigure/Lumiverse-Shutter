@@ -10,10 +10,10 @@ Shutter adds a floating widget and input bar action for triggering Lumiverse's n
 
 | Native ImageGen mode | Shutter behaviour |
 |---|---|
-| **Preview only** or **Set as background** | Shutter handles the result against the newest message. It can ask whether to insert the image or insert it automatically, and can append or replace the latest Shutter image. Shutter does not set an active background, so **Preview only** is recommended for Shutter workflows. |
+| **Preview only** or **Set as background** | Shutter pins the newest message response when generation starts. It can ask whether to insert the image or insert it automatically, and can append or replace the latest Shutter image in that pinned response. Shutter does not set an active background, so **Preview only** is recommended for Shutter workflows. |
 | **Insert into chat** or **Attach to last message** | Native ImageGen handles placement. Shutter does not insert the result, and auto-generate is skipped in these modes. |
 
-When Shutter shows the **Image Generated** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** lets you browse and reuse every image generated for the current prompt. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
+When Shutter shows the **Image Generated** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** saves every successful generation for the pinned message response and text swipe. Fresh widget generations, **Rebuild Prompt**, and **Regenerate Image** all append to the same history. The history is stored in Lumiverse per-user storage, so it survives restarts and follows the same account between desktop and mobile. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
 
 Long-press or right-click the floating widget to open actions for the newest message: **Append**, **Replace**, **Force Generate**, **View Prompt**, **Remove**, and **Remove All**. **Force Generate** appears only when native scene-change detection could otherwise skip the request.
 
@@ -51,9 +51,10 @@ These settings apply only when Shutter handles placement. They do not affect **I
 |---|---|
 | **After Generation** | Ask to insert or insert automatically after a manual generation. |
 | **Default Widget Action** | Append a new image or replace the latest Shutter image. |
-| **Generation History** | Browse and reuse every image generated for the current prompt in the Image Generated modal. |
+| **Generation History** | Save and sync every generation and its submitted prompts for each message response and text swipe. There is no automatic generation-count cap. |
 | **Swipe & Keyboard Navigation** | Navigate generation history with swipes on mobile or arrow keys on desktop. |
-| **Show Prompt in Lightbox** | Add a Prompt pill with Copy and View actions to Shutter images opened in Lumiverse's native image viewer. |
+| **Clear Generation History** | Delete all saved Shutter history metadata for the account without deleting generated images or changing messages. |
+| **Show Prompt in Lightbox** | Add the compact Prompt / View / Copy pill to Shutter images opened in Lumiverse's native image viewer. The compact mobile bar remains unchanged. The expanded view can switch between metadata saved by Shutter and metadata embedded in the image, open the image's message-swipe history, and copy whichever source is currently visible. |
 | **Shutter Image Layout** | Leave Shutter image styling alone or enable scoped custom layout controls. |
 | **Image Width** | Set inline Shutter image width from 1% to 100%. |
 | **Image Alignment** | Align reduced-width images left, Center, or Right. |
@@ -73,7 +74,10 @@ These settings apply only when Shutter handles placement. They do not affect **I
 - Shutter follows native ImageGen scene-change settings. It has no separate force-generation setting. Use native **Ignore Scene Change Detection** for always-force behaviour, or **Force Generate** from the widget menu for a single request.
 - When native **Preview Prompt Before Generating** is enabled, Shutter shows its own editable prompt preview because extensions cannot mount Lumiverse's native React preview directly.
 - Custom image layout is scoped to inline Shutter images in message content. It does not affect native attachments, uploads, pasted images, or other markdown images.
-- **View Prompt** reads provider metadata embedded in the generated image. Shutter does not store a separate copy of the prompt.
+- Shutter saves the exact positive and negative prompts returned for each successful generation while **Generation History** is enabled. Prompt View prefers that durable record and also exposes provider metadata embedded in the image as a separate source when available. **View History** opens the related message-swipe generations without adding controls to the compact mobile bar.
+- Turning **Generation History** off stops new records but does not delete existing records. Use **Clear Generation History** for explicit deletion.
+- Per-user history syncs between devices connected to the same Lumiverse deployment and account; it is not a cloud sync between unrelated Lumiverse servers.
+- Deleting a message does not transfer its history to whichever message becomes last. Existing history for the newly exposed previous response remains associated with that response.
 
 ## Compatibility
 

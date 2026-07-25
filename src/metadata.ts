@@ -145,7 +145,7 @@ async function fetchMetadataPrompt(url: string): Promise<{ prompt: string; negat
   }
 }
 
-export async function resolvePromptForImage(tag: ShutterTag | null, lightboxSrc: string): Promise<ResolvedPrompt | null> {
+export async function resolveEmbeddedPromptForImage(tag: ShutterTag | null, lightboxSrc: string): Promise<ResolvedPrompt | null> {
   let resolved: ResolvedPrompt | null = null
 
   // 1. Provider-embedded metadata from the original Shutter tag URL.
@@ -162,6 +162,9 @@ export async function resolvePromptForImage(tag: ShutterTag | null, lightboxSrc:
 
   return resolved
 }
+
+// Backwards-compatible alias for internal callers outside the 1.0.7 source split.
+export const resolvePromptForImage = resolveEmbeddedPromptForImage
 
 export function extractImageId(src: string): string | null {
   const match = src.match(IMAGE_URL_RE)

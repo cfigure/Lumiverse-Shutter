@@ -9,17 +9,29 @@ import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { Settings } from './settings'
 import type { Comms } from './comms'
 import type { GenerationResult, GenerationSkipped } from './frontend'
-import { resolvePromptForImage, type ResolvedPrompt } from './metadata'
+import { resolveEmbeddedPromptForImage } from './metadata'
 import { COPY_CHECK_SVG } from './styles'
+import {
+  formatPromptMetadataForClipboard,
+  humaniseGenerationOrigin,
+  humanisePromptMode,
+  imageUrlForHistoryRecord,
+  promptViewFromEmbedded,
+  promptViewFromRecord,
+  type GenerationHistoryRecord,
+  type GenerationOrigin,
+  type GenerationTarget,
+  type PromptMetadataView,
+} from './history'
 
 export function createModals(deps: {
   ctx: SpindleFrontendContext
   comms: Comms
   getSettings: () => Settings | null
-  triggerGenerate: (messageId?: string, chatId?: string, isAuto?: boolean, replace?: boolean, force?: boolean) => void
-  handleGenerationResult: (result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace?: boolean, continueHistory?: boolean) => void
+  triggerGenerate: (messageId?: string, chatId?: string, isAuto?: boolean, replace?: boolean, force?: boolean, pinnedTarget?: GenerationTarget, origin?: GenerationOrigin) => void
+  handleGenerationResult: (result: GenerationResult, target: GenerationTarget, isAuto: boolean, replace?: boolean, origin?: GenerationOrigin) => Promise<void>
   setGeneratingState: (active: boolean) => void
-  callImageGen: (chatId: string, overrides?: Record<string, any>) => Promise<GenerationResult | GenerationSkipped>
+  callImageGen: (chatId: string, overrides?: Record<string, any>, target?: GenerationTarget) => Promise<GenerationResult | GenerationSkipped>
   callPreviewPrompt: (chatId: string) => Promise<{ prompt: string; negativePrompt: string }>
   notifyGenerationSkipped: (reason: string) => void
   parseErrorMessage: (raw: string) => string
@@ -157,48 +169,48 @@ export function createModals(deps: {
     return btn
   }
 
-  // ── Generation history (1.0.7) ──
+  // ── Durable generation history (1.0.7) ──
   //
-  // Every generation is already persisted server-side with a stable imageId
-  // (regenerating never deletes the previous result), so history is pure
-  // client-side bookkeeping. Scope is one *prompt cycle*: only Regenerate
-  // Image continues a session (it re-enters the modal without going through
-  // triggerGenerate); Rebuild Prompt, a fresh widget trigger, or
-  // auto-generate all start a clean one. Keying by chat/message doesn't work
-  // here — widget-triggered generations have no messageId until insert time
-  // ('__last__' is resolved backend-side), so every generation in a chat
-  // would share one key and swipes/new messages would inherit stale images.
+  // The backend/userStorage record is authoritative. The modal receives the
+  // complete history for the pinned message swipe, so a fresh widget press,
+  // Rebuild Prompt, a browser restart, or another device all reopen the same
+  // sequence. The generated image itself is not duplicated in userStorage.
 
-  type GenHistoryEntry = { imageId: string; imageUrl: string; prompt: string; negativePrompt: string }
-  let genSession: GenHistoryEntry[] = []
+  let activeDestinationModal: { dismiss(): void } | null = null
 
-  function openDestinationModal(imageId: string, imageUrl: string, messageId: string, chatId: string, prompt: string, negativePrompt: string, isAuto: boolean, replace = false, continueHistory = false) {
-    // Feature tiers (both default off): Generation History enables the pill,
-    // session retention, and chevron navigation including spawn-past-the-end
-    // (chevrons always work, mirroring native SwipeControls). Gesture
-    // Navigation (child) additionally enables the touch-swipe and arrow-key
-    // input channels, mirroring native swipeGesturesEnabled. With history off
-    // the modal is exactly the pre-1.0.7 flow — single image, no pill, no
-    // gesture/keyboard capture.
+  function openDestinationModal(
+    result: GenerationResult,
+    target: GenerationTarget,
+    isAuto: boolean,
+    replace = false,
+    storedHistory: GenerationHistoryRecord[] = [],
+  ) {
     const settings = deps.getSettings()
     const historyEnabled = settings?.generationHistory === true
     const gestureEnabled = historyEnabled && settings?.gestureNavigation === true
 
-    // Continue the session only when re-entered via Regenerate Image;
-    // every other arrival is a new prompt cycle and starts clean.
-    if (!historyEnabled || !continueHistory) genSession = []
-
-    const history = genSession
-    if (history[history.length - 1]?.imageId !== imageId) {
-      history.push({ imageId, imageUrl, prompt, negativePrompt })
+    const fallbackRecord: GenerationHistoryRecord = {
+      version: 1,
+      imageId: result.imageId,
+      createdAt: Date.now(),
+      prompt: result.prompt,
+      negativePrompt: result.negativePrompt,
+      promptMode: result.promptMode,
+      origin: isAuto ? 'auto' : 'manual',
+      target,
     }
-    let idx = history.length - 1
+
+    const history = historyEnabled ? [...storedHistory] : [fallbackRecord]
+    if (!history.some(entry => entry.imageId === result.imageId)) history.push(fallbackRecord)
+    history.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
+
+    let idx = Math.max(0, history.findIndex(entry => entry.imageId === result.imageId))
+    if (idx < 0) idx = history.length - 1
     const current = () => history[idx]!
 
+    activeDestinationModal?.dismiss()
     const modal = ctx.ui.showModal({ title: 'Image Generated', width: 640, persistent: true })
-    // The existing window-capture history handler owns arrows while gesture
-    // navigation is enabled. Otherwise isolateModalInput consumes them so
-    // they cannot reach the background chat.
+    activeDestinationModal = modal
     isolateModalInput(modal, { blockArrows: !gestureEnabled })
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
@@ -206,14 +218,10 @@ export function createModals(deps: {
     const previewWrap = document.createElement('div')
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
-    preview.src = imageUrl
-    preview.addEventListener('click', () => openLightbox(current().imageUrl))
+    preview.src = imageUrlForHistoryRecord(current())
+    preview.addEventListener('click', () => openLightbox(imageUrlForHistoryRecord(current())))
     previewWrap.appendChild(preview)
 
-    // History navigation — a single pill mirroring the native swipe-controls
-    // bubble (chevrons + tabular counter). Always visible, like native at
-    // 1 / 1: the right chevron past the end spawns a new generation, so the
-    // pill is the affordance for "another one" even before history exists.
     const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
     const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
     const makeNavBtn = (dir: -1 | 1): HTMLButtonElement => {
@@ -222,8 +230,8 @@ export function createModals(deps: {
       btn.className = 'sh-hist-btn'
       btn.innerHTML = dir === -1 ? CHEVRON_LEFT : CHEVRON_RIGHT
       btn.title = dir === -1 ? 'Previous generation' : 'Next generation'
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation() // don't trip the preview's lightbox handler
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation()
         stepHistory(dir)
       })
       return btn
@@ -234,7 +242,7 @@ export function createModals(deps: {
     histCount.className = 'sh-hist-counter'
     const histPill = document.createElement('div')
     histPill.className = 'sh-hist-pill'
-    histPill.addEventListener('click', (e) => e.stopPropagation())
+    histPill.addEventListener('click', event => event.stopPropagation())
     histPill.appendChild(navPrev)
     histPill.appendChild(histCount)
     histPill.appendChild(navNext)
@@ -243,31 +251,19 @@ export function createModals(deps: {
 
     function renderHistory() {
       const entry = current()
-      preview.src = entry.imageUrl
-      // If the mini lightbox is open, keep it in sync with the selection.
+      const url = imageUrlForHistoryRecord(entry)
+      preview.src = url
       if (activeLightbox) {
         const img = activeLightbox.overlay.querySelector('img')
-        if (img) img.src = entry.imageUrl
+        if (img) img.src = url
       }
-      // Always visible within the history tier, like native at 1 / 1: the
-      // right chevron past the end spawns a new generation regardless of the
-      // Gesture Navigation setting (chevrons are the feature; gestures are
-      // extra input channels).
       navPrev.disabled = idx === 0
       const atEnd = idx === history.length - 1
-      // Past-the-end spawns a new generation (native swipe semantics), so
-      // the right chevron stays live at the end — disabled only if the
-      // prompt needed to regenerate was never returned.
-      const canRegen = !!history[history.length - 1]!.prompt.trim()
-      navNext.disabled = atEnd && !canRegen
+      navNext.disabled = atEnd && !entry.prompt.trim()
       navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
       histCount.textContent = `${idx + 1} / ${history.length}`
     }
 
-    // Shared by the Regenerate Image button and past-the-end navigation
-    // (right chevron / ArrowRight / swipe-left at the last entry). Follows
-    // the existing flow deliberately: dismiss first, hand generating state
-    // to the widget spinner, reopen with the appended result.
     let regenerating = false
     async function regenerateFromSelected() {
       if (regenerating) return
@@ -275,7 +271,7 @@ export function createModals(deps: {
       const resolvedPrompt = selected.prompt.trim()
       if (!resolvedPrompt) {
         modal.dismiss()
-        showErrorModal('Cannot regenerate because the resolved prompt was not returned by native ImageGen.')
+        showErrorModal('Cannot regenerate because the submitted prompt was not saved.')
         return
       }
 
@@ -283,19 +279,17 @@ export function createModals(deps: {
       modal.dismiss()
       deps.setGeneratingState(true)
       try {
-        const result = await deps.callImageGen(chatId, {
+        const next = await deps.callImageGen(target.chatId, {
           prompt: resolvedPrompt,
           negativePrompt: selected.negativePrompt,
           skipParse: true,
-        })
-        // skipParse routes to 'custom' prompt mode server-side (no scene, so
-        // no skip path), but handle the outcome defensively anyway.
-        if ('skipped' in result) {
+        }, target)
+        if ('skipped' in next) {
           deps.setGeneratingState(false)
-          deps.notifyGenerationSkipped(result.reason)
+          deps.notifyGenerationSkipped(next.reason)
           return
         }
-        deps.handleGenerationResult(result, messageId, chatId, isAuto, replaceChecked, true)
+        await deps.handleGenerationResult(next, target, isAuto, replaceChecked, 'regenerate')
       } catch (err: any) {
         deps.setGeneratingState(false)
         showErrorModal(deps.parseErrorMessage(err.message))
@@ -305,9 +299,6 @@ export function createModals(deps: {
     function stepHistory(dir: -1 | 1) {
       const next = idx + dir
       if (next >= history.length) {
-        // Stepping past the last entry = "give me another one" — mirrors
-        // native SwipeControls, where swiping right past the last swipe
-        // spawns a new generation. Regenerates with the end entry's prompt.
         void regenerateFromSelected()
         return
       }
@@ -316,88 +307,76 @@ export function createModals(deps: {
       renderHistory()
     }
 
-    // Capture-phase, window-level: Lumiverse's swipe hotkeys are a global
-    // document-level keydown listener whose modal guard only knows about
-    // native modals (state.activeModal), not Spindle ones — so while this
-    // modal is up, arrows must be consumed before they reach it, or paging
-    // history would also swipe the assistant message underneath. Consumed
-    // even at 1/1 so a locked-foreground modal never leaks arrows to chat.
-    const arrowHandler = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-      if (e.ctrlKey || e.metaKey || e.altKey) return // leave browser/OS combos alone
-      // The preview lightbox owns foreground input while open. Its own
-      // handler consumes the event without navigating or regenerating.
+    const arrowHandler = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
       if (activeLightbox) return
       const active = document.activeElement as HTMLElement | null
       if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return
-      e.preventDefault()
-      e.stopPropagation()
-      stepHistory(e.key === 'ArrowLeft' ? -1 : 1)
+      event.preventDefault()
+      event.stopPropagation()
+      stepHistory(event.key === 'ArrowLeft' ? -1 : 1)
     }
-    // Installed only when Gesture Navigation is on — that setting owns the
-    // active arrow-key navigation path. isolateModalInput handles the inactive
-    // state so arrows do nothing rather than leaking to the background chat.
     if (gestureEnabled) window.addEventListener('keydown', arrowHandler, { capture: true })
 
-    // Touch swipe on the preview — same feel as the native message gesture
-    // (useSwipeGesture): 10px dead-zone axis lock, then 50px displacement or
-    // 0.3px/ms velocity. preventDefault on horizontal lock also suppresses
-    // the synthetic click, so a swipe never opens the lightbox.
     let touchStartX = 0, touchStartY = 0, touchStartT = 0
     let touchLock: 'h' | 'v' | null = null
     if (gestureEnabled) {
-      previewWrap.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1) { touchLock = 'v'; return }
-        const t = e.touches[0]!
-        touchStartX = t.clientX; touchStartY = t.clientY; touchStartT = Date.now()
+      previewWrap.addEventListener('touchstart', (event) => {
+        if (event.touches.length !== 1) { touchLock = 'v'; return }
+        const touch = event.touches[0]!
+        touchStartX = touch.clientX
+        touchStartY = touch.clientY
+        touchStartT = Date.now()
         touchLock = null
       }, { passive: true })
-      previewWrap.addEventListener('touchmove', (e) => {
-        if (touchLock) { if (touchLock === 'h') e.preventDefault(); return }
-        const t = e.touches[0]!
-        const dx = t.clientX - touchStartX, dy = t.clientY - touchStartY
+      previewWrap.addEventListener('touchmove', (event) => {
+        if (touchLock) { if (touchLock === 'h') event.preventDefault(); return }
+        const touch = event.touches[0]!
+        const dx = touch.clientX - touchStartX
+        const dy = touch.clientY - touchStartY
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
         touchLock = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v'
-        if (touchLock === 'h') e.preventDefault()
+        if (touchLock === 'h') event.preventDefault()
       }, { passive: false })
-      previewWrap.addEventListener('touchend', (e) => {
+      previewWrap.addEventListener('touchend', (event) => {
         if (touchLock !== 'h') return
-        const t = e.changedTouches[0]!
-        const dx = t.clientX - touchStartX
+        const touch = event.changedTouches[0]!
+        const dx = touch.clientX - touchStartX
         const dt = Math.max(Date.now() - touchStartT, 1)
-        if (Math.abs(dx) >= 50 || Math.abs(dx) / dt >= 0.3) {
-          stepHistory(dx < 0 ? 1 : -1) // content follows finger: swipe left → next
-        }
+        if (Math.abs(dx) >= 50 || Math.abs(dx) / dt >= 0.3) stepHistory(dx < 0 ? 1 : -1)
       }, { passive: true })
     }
 
-    // Replace checkbox
     let replaceChecked = replace || (deps.getSettings()?.defaultAction === 'replace')
     const replaceSlot = document.createElement('div')
     replaceSlot.className = 'sh-replace-row'
     const replaceCheckbox = ctx.components.mountCheckbox(replaceSlot, {
       checked: replaceChecked,
       label: 'Replace existing image',
-      onChange: (on: boolean) => {
-        replaceChecked = on
-      },
+      onChange: (on: boolean) => { replaceChecked = on },
     })
     container.appendChild(replaceSlot)
 
     const choices = document.createElement('div')
     choices.className = 'sh-prompt-actions'
-    choices.appendChild(makeDestBtn('Close', 'Close without inserting', 'sh-prompt-btn-cancel', () => {
-      modal.dismiss()
-    }))
+    choices.appendChild(makeDestBtn('Close', 'Close without inserting', 'sh-prompt-btn-cancel', () => modal.dismiss()))
     choices.appendChild(makeDestBtn('Rebuild Prompt', 'Re-parse the chat and generate a new prompt', 'sh-prompt-btn-secondary', () => {
       modal.dismiss()
-      deps.triggerGenerate(messageId, chatId, isAuto, replaceChecked)
+      deps.triggerGenerate(target.messageId, target.chatId, isAuto, replaceChecked, false, target, 'rebuild')
     }))
-    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image\u2019s prompt', 'sh-prompt-btn-secondary', () => {
+    choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
       void regenerateFromSelected()
     }))
-    choices.appendChild(makeDestBtn('Insert', 'Append the selected image to the last message', 'sh-prompt-btn-primary', () => {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId: current().imageId, messageId, chatId, replace: replaceChecked })
+    choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+      ctx.sendToBackend({
+        type: 'insert_into_message',
+        imageId: current().imageId,
+        messageId: target.messageId,
+        chatId: target.chatId,
+        target,
+        replace: replaceChecked,
+      })
       modal.dismiss()
     }))
     container.appendChild(choices)
@@ -406,9 +385,177 @@ export function createModals(deps: {
     renderHistory()
 
     modal.onDismiss(() => {
+      if (activeDestinationModal === modal) activeDestinationModal = null
       dismissLightbox()
       window.removeEventListener('keydown', arrowHandler, { capture: true })
       replaceCheckbox.destroy()
+    })
+  }
+
+  let activeHistoryViewerModal: { dismiss(): void } | null = null
+
+  function openHistoryViewer(records: GenerationHistoryRecord[], initialImageId: string): void {
+    const history = [...records].sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
+    if (history.length === 0) return
+
+    activeHistoryViewerModal?.dismiss()
+    let idx = history.findIndex(entry => entry.imageId === initialImageId)
+    if (idx < 0) idx = history.length - 1
+    const current = () => history[idx]!
+
+    const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true })
+    activeHistoryViewerModal = modal
+    isolateModalInput(modal, { blockArrows: false })
+
+    const container = document.createElement('div')
+    container.className = 'sh-modal-body'
+    const previewWrap = document.createElement('div')
+    previewWrap.className = 'sh-preview'
+    const preview = document.createElement('img')
+    preview.addEventListener('click', () => openLightbox(imageUrlForHistoryRecord(current())))
+    previewWrap.appendChild(preview)
+
+    const nav = document.createElement('div')
+    nav.className = 'sh-hist-pill'
+    nav.addEventListener('click', event => event.stopPropagation())
+    const prev = document.createElement('button')
+    const next = document.createElement('button')
+    prev.type = next.type = 'button'
+    prev.className = next.className = 'sh-hist-btn'
+    prev.title = 'Previous generation'
+    next.title = 'Next generation'
+    prev.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
+    next.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
+    const count = document.createElement('span')
+    count.className = 'sh-hist-counter'
+    nav.append(prev, count, next)
+    previewWrap.appendChild(nav)
+    container.appendChild(previewWrap)
+
+    const details = document.createElement('div')
+    details.className = 'sh-prompt-source-fields'
+    container.appendChild(details)
+
+    const actions = document.createElement('div')
+    actions.className = 'sh-prompt-actions'
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', () => modal.dismiss())
+    const copyBtn = document.createElement('button')
+    copyBtn.type = 'button'
+    copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+    copyBtn.textContent = 'Copy'
+    copyBtn.addEventListener('click', () => {
+      const view = promptViewFromRecord(current())
+      navigator.clipboard.writeText(formatPromptMetadataForClipboard(view)).then(() => {
+        copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
+        copyBtn.classList.add('sh-copied')
+        setTimeout(() => {
+          if (!copyBtn.isConnected) return
+          copyBtn.textContent = 'Copy'
+          copyBtn.classList.remove('sh-copied')
+        }, 2000)
+      }).catch(() => {
+        copyBtn.textContent = 'Failed'
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
+      })
+    })
+    const insertBtn = document.createElement('button')
+    insertBtn.type = 'button'
+    insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'
+    insertBtn.textContent = 'Insert'
+    insertBtn.title = 'Insert this image into its original message response'
+    insertBtn.addEventListener('click', () => {
+      const entry = current()
+      ctx.sendToBackend({
+        type: 'insert_into_message',
+        imageId: entry.imageId,
+        messageId: entry.target.messageId,
+        chatId: entry.target.chatId,
+        target: entry.target,
+        replace: false,
+      })
+      modal.dismiss()
+    })
+    actions.append(closeBtn, copyBtn, insertBtn)
+    container.appendChild(actions)
+    modal.root.appendChild(container)
+
+    const makeReadonlyField = (label: string, text: string, short = false) => {
+      const field = document.createElement('div')
+      field.className = 'sh-prompt-field'
+      const heading = document.createElement('div')
+      heading.className = 'sh-prompt-label'
+      heading.textContent = label
+      const block = document.createElement('div')
+      block.className = short ? 'sh-prompt-readonly sh-prompt-readonly-short' : 'sh-prompt-readonly'
+      block.textContent = text
+      field.append(heading, block)
+      return field
+    }
+
+    function render(): void {
+      const entry = current()
+      preview.src = imageUrlForHistoryRecord(entry)
+      count.textContent = `${idx + 1} / ${history.length}`
+      prev.disabled = idx === 0
+      next.disabled = idx === history.length - 1
+      details.innerHTML = ''
+      const meta = document.createElement('div')
+      meta.className = 'sh-prompt-source-meta'
+      const metaParts = [new Date(entry.createdAt).toLocaleString()]
+      if (entry.promptMode) metaParts.push(`Mode: ${humanisePromptMode(entry.promptMode)}`)
+      if (entry.origin) metaParts.push(`Action: ${humaniseGenerationOrigin(entry.origin)}`)
+      meta.textContent = metaParts.join(' · ')
+      details.appendChild(meta)
+      details.appendChild(makeReadonlyField('Prompt', entry.prompt || 'Prompt unavailable'))
+      if (entry.negativePrompt) details.appendChild(makeReadonlyField('Negative Prompt', entry.negativePrompt, true))
+      if (activeLightbox) {
+        const lightboxImage = activeLightbox.overlay.querySelector('img')
+        if (lightboxImage) lightboxImage.src = imageUrlForHistoryRecord(entry)
+      }
+    }
+
+    const step = (direction: -1 | 1) => {
+      const nextIndex = idx + direction
+      if (nextIndex < 0 || nextIndex >= history.length) return
+      idx = nextIndex
+      render()
+    }
+    prev.addEventListener('click', event => { event.stopPropagation(); step(-1) })
+    next.addEventListener('click', event => { event.stopPropagation(); step(1) })
+    const arrowHandler = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target)) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      step(event.key === 'ArrowLeft' ? -1 : 1)
+    }
+    window.addEventListener('keydown', arrowHandler, { capture: true })
+
+    let touchStartX = 0
+    let touchStartY = 0
+    previewWrap.addEventListener('touchstart', event => {
+      const touch = event.touches[0]
+      if (!touch) return
+      touchStartX = touch.clientX
+      touchStartY = touch.clientY
+    }, { passive: true })
+    previewWrap.addEventListener('touchend', event => {
+      const touch = event.changedTouches[0]
+      if (!touch) return
+      const dx = touch.clientX - touchStartX
+      const dy = touch.clientY - touchStartY
+      if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1)
+    }, { passive: true })
+
+    render()
+    modal.onDismiss(() => {
+      if (activeHistoryViewerModal === modal) activeHistoryViewerModal = null
+      dismissLightbox()
+      window.removeEventListener('keydown', arrowHandler, { capture: true })
     })
   }
 
@@ -428,32 +575,30 @@ export function createModals(deps: {
   // message. Resolution goes through the message markdown (tag path), same
   // as the lightbox pill — messageId '__last__' and index -1 are resolved
   // backend-side, so this works even when the message isn't rendered in the
-  // (virtualized) chat DOM. Ethos-consistent: metadata is fetched and parsed
-  // on this explicit request only; nothing is stored.
+  // (virtualized) chat DOM. It resolves Shutter's durable record and the
+  // provider-embedded metadata independently, then shows one source at a time.
 
   let promptViewerOpen = false
+  let activePromptViewerModal: { dismiss(): void } | null = null
 
   function viewLastPrompt(): void {
     const chatId = ctx.getActiveChat()?.chatId ?? undefined
-    if (!chatId) return
-    if (promptViewerOpen) return
+    if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 
     const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 })
+    activePromptViewerModal = modal
     isolateModalInput(modal)
     let dismissed = false
+    let activeView: PromptMetadataView | null = null
 
     const container = document.createElement('div')
     container.className = 'sh-prompt-body'
-
-    // Subtitle: parity with the Preview & Edit modal, and documents where
-    // the prompt comes from (embedded metadata, nothing stored).
     const subtitle = document.createElement('p')
     subtitle.className = 'sh-prompt-subtitle'
-    subtitle.textContent = 'Read from the image\u2019s embedded generation metadata.'
+    subtitle.textContent = 'Reading saved and embedded prompt metadata.'
     container.appendChild(subtitle)
 
-    // Loading state: host spinner + status line, swapped in place on resolve.
     const status = document.createElement('div')
     status.className = 'sh-prompt-viewer-status'
     const spinnerSlot = document.createElement('span')
@@ -465,11 +610,54 @@ export function createModals(deps: {
     let spinnerHandle: { destroy(): void } | null = ctx.components.mountSpinner(spinnerSlot, { size: 14, fast: true })
     const destroySpinner = () => { spinnerHandle?.destroy(); spinnerHandle = null }
 
+    const sourceSlot = document.createElement('div')
+    const fieldsSlot = document.createElement('div')
+    fieldsSlot.className = 'sh-prompt-source-fields'
+    const actions = document.createElement('div')
+    actions.className = 'sh-prompt-actions'
+    const copyBtn = document.createElement('button')
+    copyBtn.type = 'button'
+    copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+    copyBtn.textContent = 'Copy'
+    copyBtn.hidden = true
+    copyBtn.addEventListener('click', () => {
+      if (!activeView) return
+      navigator.clipboard.writeText(formatPromptMetadataForClipboard(activeView)).then(() => {
+        copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
+        copyBtn.classList.add('sh-copied')
+        setTimeout(() => {
+          if (!copyBtn.isConnected) return
+          copyBtn.textContent = 'Copy'
+          copyBtn.classList.remove('sh-copied')
+        }, 2000)
+      }).catch(() => {
+        copyBtn.textContent = 'Failed'
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
+      })
+    })
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', () => modal.dismiss())
+    const historyBtn = document.createElement('button')
+    historyBtn.type = 'button'
+    historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+    historyBtn.textContent = 'View History'
+    historyBtn.hidden = true
+    actions.appendChild(historyBtn)
+    actions.appendChild(copyBtn)
+    actions.appendChild(closeBtn)
+
+    container.appendChild(sourceSlot)
+    container.appendChild(fieldsSlot)
+    container.appendChild(actions)
     modal.root.appendChild(container)
     modal.onDismiss(() => {
       dismissed = true
       destroySpinner()
       promptViewerOpen = false
+      if (activePromptViewerModal === modal) activePromptViewerModal = null
     })
 
     const makeField = (label: string, text: string, short = false) => {
@@ -486,47 +674,27 @@ export function createModals(deps: {
       return field
     }
 
-    const makeActions = (resolved: ResolvedPrompt | null) => {
-      const actions = document.createElement('div')
-      actions.className = 'sh-prompt-actions'
-      if (resolved) {
-        const copyBtn = document.createElement('button')
-        copyBtn.type = 'button'
-        copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-        copyBtn.textContent = 'Copy'
-        copyBtn.addEventListener('click', () => {
-          const text = resolved.negativePrompt
-            ? `${resolved.prompt}\n\nNegative prompt: ${resolved.negativePrompt}`
-            : resolved.prompt
-          // Mirrors the lightbox pill's confirmation: checkmark + success
-          // color for 2000ms via the shared sh-copied class.
-          navigator.clipboard.writeText(text).then(() => {
-            copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
-            copyBtn.classList.add('sh-copied')
-            setTimeout(() => {
-              if (!copyBtn.isConnected) return
-              copyBtn.textContent = 'Copy'
-              copyBtn.classList.remove('sh-copied')
-            }, 2000)
-          }).catch(() => {
-            copyBtn.textContent = 'Failed'
-            setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
-          })
-        })
-        actions.appendChild(copyBtn)
-      }
-      const closeBtn = document.createElement('button')
-      closeBtn.type = 'button'
-      closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-      closeBtn.textContent = 'Close'
-      closeBtn.addEventListener('click', () => modal.dismiss())
-      actions.appendChild(closeBtn)
-      return actions
-    }
-
-    const showMessage = (text: string) => {
-      statusText.textContent = text
-      container.appendChild(makeActions(null))
+    function renderSource(view: PromptMetadataView) {
+      activeView = view
+      sourceSlot.querySelectorAll<HTMLButtonElement>('.sh-prompt-source-btn').forEach(button => {
+        button.classList.toggle('sh-active', button.dataset.source === view.source)
+        button.setAttribute('aria-selected', String(button.dataset.source === view.source))
+      })
+      subtitle.textContent = view.source === 'shutter'
+        ? 'The exact prompt saved by Shutter when this image was generated.'
+        : 'Prompt data read from metadata embedded in the image.'
+      fieldsSlot.innerHTML = ''
+      const meta = document.createElement('div')
+      meta.className = 'sh-prompt-source-meta'
+      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
+      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
+      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
+      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
+      meta.textContent = details.join(' · ')
+      fieldsSlot.appendChild(meta)
+      fieldsSlot.appendChild(makeField('Prompt', view.prompt))
+      if (view.negativePrompt) fieldsSlot.appendChild(makeField('Negative Prompt', view.negativePrompt, true))
+      copyBtn.hidden = false
     }
 
     void (async () => {
@@ -534,28 +702,56 @@ export function createModals(deps: {
       if (dismissed) return
       if (!tag) {
         destroySpinner()
-        spinnerSlot.remove()
-        showMessage('No Shutter image found in the last message.')
+        statusText.textContent = 'No Shutter image found in the last message.'
         return
       }
-      const resolved = await resolvePromptForImage(tag, tag.path)
+
+      const [record, embedded] = await Promise.all([
+        comms.getGenerationRecord(tag.imageId),
+        resolveEmbeddedPromptForImage(tag, tag.path),
+      ])
+      const history = record ? await comms.getGenerationHistory(record.target) : []
       if (dismissed) return
       destroySpinner()
-      if (!resolved) {
-        spinnerSlot.remove()
-        showMessage('No readable prompt metadata in this image.')
+      status.remove()
+
+      if (history.length > 0) {
+        historyBtn.hidden = false
+        historyBtn.textContent = `View History · ${history.length}`
+        historyBtn.addEventListener('click', () => {
+          modal.dismiss()
+          openHistoryViewer(history, tag.imageId)
+        }, { once: true })
+      }
+
+      const shutterView = record ? promptViewFromRecord(record) : null
+      const embeddedView = embedded ? promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt) : null
+      if (!shutterView && !embeddedView) {
+        subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.'
         return
       }
-      status.remove()
-      container.appendChild(makeField('Prompt', resolved.prompt))
-      if (resolved.negativePrompt) {
-        container.appendChild(makeField('Negative Prompt', resolved.negativePrompt, true))
+
+      if (shutterView && embeddedView) {
+        sourceSlot.className = 'sh-prompt-source-tabs'
+        for (const [source, label] of [['shutter', 'Shutter'], ['embedded', 'Embedded']] as const) {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.className = 'sh-prompt-source-btn'
+          button.dataset.source = source
+          button.textContent = label
+          button.setAttribute('role', 'tab')
+          button.addEventListener('click', () => renderSource(source === 'shutter' ? shutterView : embeddedView))
+          sourceSlot.appendChild(button)
+        }
+      } else {
+        sourceSlot.remove()
       }
-      container.appendChild(makeActions(resolved))
+
+      renderSource(shutterView ?? embeddedView!)
     })()
   }
 
-  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, chatId: string, messageId?: string, isAuto = false, replace = false) {
+  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, target: GenerationTarget, isAuto = false, replace = false, origin: GenerationOrigin = 'preview') {
     if (promptPreviewOpen) return
     promptPreviewOpen = true
     const modal = ctx.ui.showModal({ title: 'Preview & Edit Image Prompt', width: 640, persistent: true })
@@ -633,16 +829,16 @@ export function createModals(deps: {
     deps.setGeneratingState(true)
 
     try {
-      const result = await deps.callPreviewPrompt(chatId)
+      const result = await deps.callPreviewPrompt(target.chatId)
 
       deps.setGeneratingState(false)
       openPromptPreviewModal(
         result.prompt,
         result.negativePrompt,
-        chatId,
-        messageId,
+        target,
         isAuto,
         replace,
+        origin,
       )
     } catch (err: any) {
       deps.setGeneratingState(false)
@@ -661,11 +857,11 @@ export function createModals(deps: {
 
       deps.setGeneratingState(true)
       try {
-        const result = await deps.callImageGen(chatId, {
+        const result = await deps.callImageGen(target.chatId, {
           prompt,
           negativePrompt: negTextarea.value,
           skipParse: true,
-        })
+        }, target)
         // skipParse routes to 'custom' prompt mode server-side (no scene, so
         // no skip path), but handle the outcome defensively anyway.
         if ('skipped' in result) {
@@ -673,7 +869,7 @@ export function createModals(deps: {
           if (!isAuto) deps.notifyGenerationSkipped(result.reason)
           return
         }
-        deps.handleGenerationResult(result, messageId || '__last__', chatId, isAuto, replace)
+        await deps.handleGenerationResult(result, target, isAuto, replace, origin)
       } catch (err: any) {
         deps.setGeneratingState(false)
         showErrorModal(deps.parseErrorMessage(err.message))
@@ -690,12 +886,21 @@ export function createModals(deps: {
 
   return {
     openDestinationModal,
+    openHistoryViewer,
     openPromptPreviewModal,
     showErrorModal,
     viewLastPrompt,
     isPromptPreviewOpen: () => promptPreviewOpen,
-    // Entry cleanup: the mini lightbox is the only modal surface with
-    // document-level listeners to release (host modals clean themselves up).
-    dispose: dismissLightbox,
+    onHistoryCleared: () => {
+      activeDestinationModal?.dismiss()
+      activeHistoryViewerModal?.dismiss()
+      activePromptViewerModal?.dismiss()
+    },
+    dispose: () => {
+      activeDestinationModal?.dismiss()
+      activeHistoryViewerModal?.dismiss()
+      activePromptViewerModal?.dismiss()
+      dismissLightbox()
+    },
   }
 }

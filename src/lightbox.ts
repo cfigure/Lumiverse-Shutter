@@ -16,14 +16,31 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { Settings } from './settings'
 import type { Comms } from './comms'
-import { IMAGE_URL_RE, resolvePromptForImage, extractImageId, type ResolvedPrompt } from './metadata'
+import { IMAGE_URL_RE, resolveEmbeddedPromptForImage, extractImageId } from './metadata'
 import { COPY_CHECK_SVG } from './styles'
+import {
+  formatPromptMetadataForClipboard,
+  humaniseGenerationOrigin,
+  humanisePromptMode,
+  promptViewFromEmbedded,
+  promptViewFromRecord,
+  type GenerationHistoryRecord,
+  type PromptMetadataView,
+} from './history'
+
+type PromptSources = {
+  shutter: PromptMetadataView | null
+  embedded: PromptMetadataView | null
+  history: GenerationHistoryRecord[]
+  imageId: string
+}
 
 export function createLightboxPromptLabel(deps: {
   ctx: SpindleFrontendContext
   comms: Comms
   getSettings: () => Settings | null
   hasPermission: (permission: string) => boolean
+  openHistory: (records: GenerationHistoryRecord[], imageId: string) => void
 }) {
   const { ctx, comms } = deps
 
@@ -46,14 +63,13 @@ export function createLightboxPromptLabel(deps: {
   // component hook, so Shutter identifies lightbox images by matching them
   // back to a clicked chat image rendered from Shutter's ![shutter](...) markdown.
   //
-  // Prompt sources, in order:
-  //   1. Provider-embedded PNG metadata from Shutter's original tag URL
+  // Prompt sources:
+  //   1. Shutter's durable generation record, when available.
+  //   2. Provider-embedded PNG metadata from the original image
   //      (A1111/Forge 'parameters', NovelAI 'Comment'/'Description',
   //      ComfyUI workflow text — best effort).
-  //   2. Metadata from the lightbox src as a fallback.
-  //
-  // Shutter does not persist prompt records for this feature; images without
-  // readable provider metadata simply show no label.
+  // Both are retained independently so the expanded view can switch between
+  // exactly what Shutter submitted and what the provider embedded.
 
   // ── Lightbox detection and label injection ──
   //
@@ -339,7 +355,7 @@ export function createLightboxPromptLabel(deps: {
     await nextFrame()
   }
 
-  async function decorateLightbox(portalRoot: Element, img: HTMLImageElement, promptPromise: Promise<ResolvedPrompt | null>): Promise<void> {
+  async function decorateLightbox(portalRoot: Element, img: HTMLImageElement, promptPromise: Promise<PromptSources | null>): Promise<void> {
     if (activeLabel) {
       if (activeLabel.img === img && img.isConnected && document.querySelector('.sh-lightbox-prompt')) return
       activeLabel.dismiss()
@@ -465,11 +481,24 @@ export function createLightboxPromptLabel(deps: {
     // shared close-button slot) lives OUTSIDE .sh-lightbox-prompt-content
     // so the host-mounted close button and the copy listener survive the
     // shell → prompt swap without any destroy/remount or rewiring.
-    function bodyContentHtml(resolved: ResolvedPrompt): string {
-      const negativeBlock = resolved.negativePrompt
-        ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(resolved.negativePrompt)}</div>`
+    function bodyContentHtml(view: PromptMetadataView, sources: PromptSources): string {
+      const selector = sources.shutter && sources.embedded
+        ? `<div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
+            <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
+            <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
+          </div>`
         : ''
-      return `<div class="sh-lightbox-prompt-text">${escapeHtml(resolved.prompt)}</div>${negativeBlock}`
+      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
+      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
+      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
+      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
+      const negativeBlock = view.negativePrompt
+        ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
+        : ''
+      const historyButton = sources.history.length > 0
+        ? `<button type="button" class="sh-prompt-history-btn">View History · ${sources.history.length}</button>`
+        : ''
+      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}${historyButton}`
     }
 
     // Inject a stable shell immediately — or, when metadata already settled,
@@ -494,9 +523,9 @@ export function createLightboxPromptLabel(deps: {
           <span class="sh-lightbox-prompt-title">Prompt</span>
           <span class="sh-lightbox-prompt-status"><span class="sh-lightbox-prompt-spinner-slot" aria-hidden="true"></span><span>Reading prompt…</span></span>
           <span class="sh-lightbox-prompt-actions">
-            <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View</button>
-            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
-            <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
+            <button class="sh-lightbox-prompt-view" type="button" title="View prompt metadata" aria-label="View prompt metadata" hidden disabled>View</button>
+            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt metadata" aria-label="Collapse prompt metadata" hidden disabled>Collapse</button>
+            <button class="sh-lightbox-prompt-copy" type="button" title="Copy visible metadata" aria-label="Copy visible metadata" hidden disabled>Copy</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
         </div>
@@ -562,7 +591,8 @@ export function createLightboxPromptLabel(deps: {
     const cleanupFns: Array<() => void> = []
     cleanupFns.push(() => portalWatcher.disconnect())
     let dismissed = false
-    let resolvedPrompt: ResolvedPrompt | null = null
+    let promptSources: PromptSources | null = null
+    let resolvedPrompt: PromptMetadataView | null = null
     const promptEl = labelEl
     const scrollEl = wrapper.querySelector('.sh-lightbox-prompt-scroll') as HTMLElement | null
     const contentEl = wrapper.querySelector('.sh-lightbox-prompt-content') as HTMLElement | null
@@ -862,6 +892,32 @@ export function createLightboxPromptLabel(deps: {
       expandedReserve = Math.min(promptEl.offsetHeight, maxH) + CAPTION_GAP + CAPTION_EDGE
     }
 
+    function renderPromptSource(view: PromptMetadataView): void {
+      if (!contentEl || !promptSources) return
+      resolvedPrompt = view
+      contentEl.innerHTML = bodyContentHtml(view, promptSources)
+      contentEl.querySelectorAll<HTMLButtonElement>('.sh-prompt-source-btn').forEach(button => {
+        button.addEventListener('click', () => {
+          const next = button.dataset.source === 'embedded'
+            ? promptSources?.embedded
+            : promptSources?.shutter
+          if (!next || next.source === resolvedPrompt?.source) return
+          renderPromptSource(next)
+          if (scrollEl) scrollEl.scrollTop = 0
+          if (promptExpanded) {
+            refreshExpandedReserve()
+            applyImageReserve(true)
+            suppressPositionUntil = 0
+            positionLabel()
+          }
+        })
+      })
+      contentEl.querySelector<HTMLButtonElement>('.sh-prompt-history-btn')?.addEventListener('click', () => {
+        if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId) return
+        deps.openHistory(promptSources.history, promptSources.imageId)
+      })
+    }
+
     function setPromptExpanded(expanded: boolean): void {
       if (!promptEl || !contentEl || !scrollEl || !resolvedPrompt) return
       promptExpanded = expanded
@@ -899,9 +955,7 @@ export function createLightboxPromptLabel(deps: {
     const copyBtn = wrapper.querySelector('.sh-lightbox-prompt-copy') as HTMLButtonElement | null
     copyBtn?.addEventListener('click', () => {
       if (!copyBtn || !resolvedPrompt) return
-      const text = resolvedPrompt.negativePrompt
-        ? `${resolvedPrompt.prompt}\n\nNegative prompt: ${resolvedPrompt.negativePrompt}`
-        : resolvedPrompt.prompt
+      const text = formatPromptMetadataForClipboard(resolvedPrompt)
       // Mirrors native's code-copy confirmation: label swap + success color
       // for 2000ms, with a checkmark inheriting the success color.
       navigator.clipboard.writeText(text).then(() => {
@@ -957,16 +1011,16 @@ export function createLightboxPromptLabel(deps: {
       dismissLabel()
       return
     }
-    if (!resolved) {
-      // No readable metadata but the viewer is still open: the pill leaves
-      // quietly and the image reclaims the strip immediately — same shape as
-      // the user hiding the prompt.
+    if (!resolved || (!resolved.shutter && !resolved.embedded)) {
+      // No saved or readable embedded metadata but the viewer is still open:
+      // the pill leaves quietly and the image reclaims the strip immediately.
       dismissLabel('hide')
       return
     }
-    resolvedPrompt = resolved
+    promptSources = resolved
+    resolvedPrompt = resolved.shutter ?? resolved.embedded
 
-    if (!promptEl || !contentEl || !scrollEl) {
+    if (!promptEl || !contentEl || !scrollEl || !resolvedPrompt) {
       dismissLabel()
       return
     }
@@ -977,7 +1031,7 @@ export function createLightboxPromptLabel(deps: {
     promptEl.classList.remove('sh-loading')
     promptEl.classList.add('sh-ready', 'sh-pill')
     promptEl.classList.remove('sh-expanded')
-    contentEl.innerHTML = bodyContentHtml(resolved)
+    renderPromptSource(resolvedPrompt)
     scrollEl.hidden = true
     if (statusEl) statusEl.hidden = true
     if (viewBtn) {
@@ -1025,6 +1079,16 @@ export function createLightboxPromptLabel(deps: {
     const tagPromise = (messageId && chatId)
       ? comms.resolveShutterTag(chatId, messageId, index)
       : Promise.resolve(null)
+    // Start the small userStorage lookup immediately. Embedded metadata still
+    // waits for the native image to settle so it cannot compete with the
+    // lightbox's image download on constrained mobile connections.
+    const recordPromise = tagPromise.then(tag => {
+      const imageId = tag?.imageId ?? clickedId
+      return imageId ? comms.getGenerationRecord(imageId) : Promise.resolve(null)
+    })
+    const historyPromise = recordPromise.then(record =>
+      record ? comms.getGenerationHistory(record.target) : Promise.resolve([] as GenerationHistoryRecord[])
+    )
     // The tag round-trip starts NOW (Spindle message channel — no HTTP
     // contention), but the metadata BYTE fetch is gated on the lightbox
     // image finishing download/decode/visual settling: both requests pull
@@ -1050,7 +1114,22 @@ export function createLightboxPromptLabel(deps: {
       located = true
       stopLooking()
       const promptPromise = Promise.all([tagPromise, waitForLightboxImageSettled(found.img)])
-        .then(([tag]) => resolvePromptForImage(tag, clickedSrc))
+        .then(async ([tag]) => {
+          const [record, history, embedded] = await Promise.all([
+            recordPromise,
+            historyPromise,
+            resolveEmbeddedPromptForImage(tag, clickedSrc),
+          ])
+          const sources: PromptSources = {
+            shutter: record ? promptViewFromRecord(record) : null,
+            embedded: embedded
+              ? promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt)
+              : null,
+            history,
+            imageId: tag?.imageId ?? clickedId ?? '',
+          }
+          return sources.shutter || sources.embedded ? sources : null
+        })
       void decorateLightbox(found.portalRoot, found.img, promptPromise)
       return true
     }
@@ -1096,5 +1175,9 @@ export function createLightboxPromptLabel(deps: {
     clearReserveStyle()
   }
 
-  return { sync: syncLightboxObserver, dispose }
+  return {
+    sync: syncLightboxObserver,
+    onHistoryCleared: () => activeLabel?.dismiss(),
+    dispose,
+  }
 }

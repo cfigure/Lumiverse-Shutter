@@ -13,8 +13,7 @@ import { resolveEmbeddedPromptForImage } from './metadata'
 import { COPY_CHECK_SVG } from './styles'
 import {
   formatPromptMetadataForClipboard,
-  humaniseGenerationOrigin,
-  humanisePromptMode,
+  formatPromptMetadataLine,
   imageUrlForHistoryRecord,
   promptViewFromEmbedded,
   promptViewFromRecord,
@@ -196,11 +195,7 @@ export function createModals(deps: {
         button.setAttribute('aria-selected', String(selected))
       })
 
-      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
-      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
-      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
-      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
-      meta.textContent = details.join(' · ')
+      meta.textContent = formatPromptMetadataLine(view)
 
       fields.replaceChildren()
       fields.classList.toggle('sh-no-negative', !view.negativePrompt)
@@ -350,6 +345,8 @@ export function createModals(deps: {
       negativePrompt: result.negativePrompt,
       promptMode: result.promptMode,
       origin: isAuto ? 'auto' : 'manual',
+      provider: result.provider,
+      model: result.model,
       target,
     }
 
@@ -700,10 +697,7 @@ export function createModals(deps: {
       count.textContent = `${idx + 1} / ${history.length}`
       prev.disabled = committing || idx === 0
       next.disabled = committing || idx === history.length - 1
-      const metaParts = [new Date(entry.createdAt).toLocaleString()]
-      if (entry.promptMode) metaParts.push(`Mode: ${humanisePromptMode(entry.promptMode)}`)
-      if (entry.origin) metaParts.push(`Action: ${humaniseGenerationOrigin(entry.origin)}`)
-      summary.textContent = metaParts.join(' · ')
+      summary.textContent = formatPromptMetadataLine(promptViewFromRecord(entry))
       if (activeLightbox) {
         const lightboxImage = activeLightbox.overlay.querySelector('img')
         if (lightboxImage) lightboxImage.src = imageUrlForHistoryRecord(entry)

@@ -17,6 +17,8 @@ export type GenerationResult = {
   prompt: string
   negativePrompt: string
   promptMode: string
+  provider?: string
+  model?: string
 }
 
 // Native ImageGen returns { generated: false, reason } when the scene hasn't
@@ -244,6 +246,51 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Native ImageGen ──
 
   let cachedNativeSettings: Record<string, any> | null = null
+  let cachedImageProviderLabels: Map<string, string> | null = null
+
+  type ImageGenerationSource = {
+    providerId: string
+    model: string
+  }
+
+  async function fetchJsonBestEffort(url: string, timeoutMs = 2000): Promise<any | null> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetch(url, { signal: controller.signal })
+      if (!response.ok) return null
+      return await response.json()
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  async function getImageProviderLabels(): Promise<Map<string, string>> {
+    if (cachedImageProviderLabels) return cachedImageProviderLabels
+    const data = await fetchJsonBestEffort('/api/v1/image-gen-connections/providers')
+    const labels = new Map<string, string>()
+    if (Array.isArray(data?.providers)) {
+      for (const provider of data.providers) {
+        if (typeof provider?.id === 'string' && typeof provider?.name === 'string') {
+          labels.set(provider.id, provider.name)
+        }
+      }
+    }
+    if (labels.size > 0) cachedImageProviderLabels = labels
+    return labels
+  }
+
+  async function resolveImageGenerationSource(connectionId: unknown): Promise<ImageGenerationSource | null> {
+    if (typeof connectionId !== 'string' || !connectionId) return null
+    const connection = await fetchJsonBestEffort(`/api/v1/image-gen-connections/${encodeURIComponent(connectionId)}`)
+    if (!connection || typeof connection.provider !== 'string') return null
+    return {
+      providerId: connection.provider,
+      model: typeof connection.model === 'string' ? connection.model : '',
+    }
+  }
 
 // Raw fetch is deliberate; see the note above callImageGen below.
   async function fetchNativeSettings(): Promise<Record<string, any>> {
@@ -275,6 +322,8 @@ export function setup(ctx: SpindleFrontendContext) {
     target?: GenerationTarget,
   ): Promise<GenerationResult | GenerationSkipped> {
     const native = await fetchNativeSettings()
+    const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
+    const providerLabelsPromise = getImageProviderLabels()
     const body: Record<string, any> = {
       ...native,
       ...overrides,
@@ -299,6 +348,12 @@ export function setup(ctx: SpindleFrontendContext) {
       return { skipped: true, reason: result.reason || 'Scene has not changed enough' }
     }
     if (!result.imageId) throw new Error('Image generated but not persisted')
+
+    const providerId = typeof result.provider === 'string' ? result.provider : ''
+    const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise])
+    const provider = providerId ? (providerLabels.get(providerId) || '') : ''
+    const model = source && source.providerId === providerId ? source.model : ''
+
     return {
       imageId: result.imageId,
       imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
@@ -306,6 +361,8 @@ export function setup(ctx: SpindleFrontendContext) {
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
       negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
       promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
+      provider: provider || undefined,
+      model: model || undefined,
     }
   }
 
@@ -381,6 +438,8 @@ export function setup(ctx: SpindleFrontendContext) {
         negativePrompt: result.negativePrompt,
         promptMode: result.promptMode,
         origin,
+        provider: result.provider,
+        model: result.model,
       })
     }
 

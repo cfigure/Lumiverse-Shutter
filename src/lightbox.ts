@@ -20,8 +20,7 @@ import { IMAGE_URL_RE, resolveEmbeddedPromptForImage, extractImageId } from './m
 import { COPY_CHECK_SVG } from './styles'
 import {
   formatPromptMetadataForClipboard,
-  humaniseGenerationOrigin,
-  humanisePromptMode,
+  formatPromptMetadataLine,
   promptViewFromEmbedded,
   promptViewFromRecord,
   type GenerationHistoryRecord,
@@ -488,14 +487,11 @@ export function createLightboxPromptLabel(deps: {
             <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
           </div>`
         : ''
-      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
-      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
-      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
-      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
+      const details = formatPromptMetadataLine(view)
       const negativeBlock = view.negativePrompt
         ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
         : ''
-      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
+      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details)}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
     }
 
     // Inject a stable shell immediately — or, when metadata already settled,

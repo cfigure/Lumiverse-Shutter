@@ -105,6 +105,8 @@ function isHistoryRecord(value: unknown): value is GenerationHistoryRecord {
     && typeof record.prompt === 'string'
     && typeof record.negativePrompt === 'string'
     && typeof record.promptMode === 'string'
+    && (record.provider === undefined || typeof record.provider === 'string')
+    && (record.model === undefined || typeof record.model === 'string')
     && !!record.target
     && typeof record.target.chatId === 'string'
     && typeof record.target.messageId === 'string'
@@ -187,6 +189,8 @@ async function appendGenerationHistory(
         negativePrompt: input.negativePrompt,
         promptMode: input.promptMode,
         origin: input.origin,
+        provider: input.provider,
+        model: input.model,
         target,
       }
 

@@ -21,6 +21,8 @@ export type GenerationHistoryRecord = {
   negativePrompt: string
   promptMode: string
   origin: GenerationOrigin
+  provider?: string
+  model?: string
   target: GenerationTarget
 }
 
@@ -30,6 +32,8 @@ export type GenerationHistoryInput = {
   negativePrompt: string
   promptMode: string
   origin: GenerationOrigin
+  provider?: string
+  model?: string
 }
 
 export type PromptMetadataView = {
@@ -39,6 +43,8 @@ export type PromptMetadataView = {
   createdAt?: number
   promptMode?: string
   origin?: GenerationOrigin
+  provider?: string
+  model?: string
 }
 
 const SHUTTER_IMAGE_GLOBAL_RE = /\n*!\[shutter\]\(\/api\/v1\/(?:images|image-gen\/results)\/[a-f0-9-]+\)/gi
@@ -74,6 +80,8 @@ export function promptViewFromRecord(record: GenerationHistoryRecord): PromptMet
     createdAt: record.createdAt,
     promptMode: record.promptMode,
     origin: record.origin,
+    provider: record.provider,
+    model: record.model,
   }
 }
 
@@ -97,6 +105,15 @@ export function humaniseGenerationOrigin(origin?: GenerationOrigin): string {
     case 'preview': return 'Prompt preview'
     default: return 'Manual generation'
   }
+}
+
+
+export function formatPromptMetadataLine(view: PromptMetadataView): string {
+  const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
+  if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
+  if (view.provider) details.push(`Provider: ${view.provider}`)
+  if (view.model) details.push(`Model: ${view.model}`)
+  return details.join(' · ')
 }
 
 export function formatPromptMetadataForClipboard(view: PromptMetadataView): string {

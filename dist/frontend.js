@@ -60,6 +60,8 @@ function isHistoryRecord(value) {
         && typeof record.prompt === 'string'
         && typeof record.negativePrompt === 'string'
         && typeof record.promptMode === 'string'
+        && (record.provider === undefined || typeof record.provider === 'string')
+        && (record.model === undefined || typeof record.model === 'string')
         && !!record.target
         && typeof record.target.chatId === 'string'
         && typeof record.target.messageId === 'string';
@@ -133,6 +135,8 @@ async function appendGenerationHistory(target, input, userId) {
             negativePrompt: input.negativePrompt,
             promptMode: input.promptMode,
             origin: input.origin,
+            provider: input.provider,
+            model: input.model,
             target,
         };
     const targetPath = historyTargetRecordPath(record);
@@ -538,7 +542,6 @@ if (!spindle.permissions.has('interceptor')) {
 }
 spindle.log.info('Shutter loaded!');
 };
-
 __modules["./comms"] = function(module, exports, require) {
 "use strict";
 // Spindle message-channel round-trips, correlated by requestId with timeout
@@ -643,7 +646,6 @@ function createComms(ctx) {
     };
 }
 };
-
 __modules["./frontend"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -849,6 +851,50 @@ function setup(ctx) {
     });
     // ── Native ImageGen ──
     let cachedNativeSettings = null;
+    let cachedImageProviderLabels = null;
+    async function fetchJsonBestEffort(url, timeoutMs = 2000) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(url, { signal: controller.signal });
+            if (!response.ok)
+                return null;
+            return await response.json();
+        }
+        catch {
+            return null;
+        }
+        finally {
+            clearTimeout(timeout);
+        }
+    }
+    async function getImageProviderLabels() {
+        if (cachedImageProviderLabels)
+            return cachedImageProviderLabels;
+        const data = await fetchJsonBestEffort('/api/v1/image-gen-connections/providers');
+        const labels = new Map();
+        if (Array.isArray(data?.providers)) {
+            for (const provider of data.providers) {
+                if (typeof provider?.id === 'string' && typeof provider?.name === 'string') {
+                    labels.set(provider.id, provider.name);
+                }
+            }
+        }
+        if (labels.size > 0)
+            cachedImageProviderLabels = labels;
+        return labels;
+    }
+    async function resolveImageGenerationSource(connectionId) {
+        if (typeof connectionId !== 'string' || !connectionId)
+            return null;
+        const connection = await fetchJsonBestEffort(`/api/v1/image-gen-connections/${encodeURIComponent(connectionId)}`);
+        if (!connection || typeof connection.provider !== 'string')
+            return null;
+        return {
+            providerId: connection.provider,
+            model: typeof connection.model === 'string' ? connection.model : '',
+        };
+    }
     // Raw fetch is deliberate; see the note above callImageGen below.
     async function fetchNativeSettings() {
         try {
@@ -876,6 +922,8 @@ function setup(ctx) {
     // subprocess does not have.
     async function callImageGen(chatId, overrides, target) {
         const native = await fetchNativeSettings();
+        const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId);
+        const providerLabelsPromise = getImageProviderLabels();
         const body = {
             ...native,
             ...overrides,
@@ -900,6 +948,10 @@ function setup(ctx) {
         }
         if (!result.imageId)
             throw new Error('Image generated but not persisted');
+        const providerId = typeof result.provider === 'string' ? result.provider : '';
+        const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise]);
+        const provider = providerId ? (providerLabels.get(providerId) || '') : '';
+        const model = source && source.providerId === providerId ? source.model : '';
         return {
             imageId: result.imageId,
             imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
@@ -907,6 +959,8 @@ function setup(ctx) {
             prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
             negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
             promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
+            provider: provider || undefined,
+            model: model || undefined,
         };
     }
     async function callPreviewPrompt(chatId) {
@@ -969,6 +1023,8 @@ function setup(ctx) {
                 negativePrompt: result.negativePrompt,
                 promptMode: result.promptMode,
                 origin,
+                provider: result.provider,
+                model: result.model,
             });
         }
         // Native output modes own their own UI/insertion, but their successful
@@ -1338,7 +1394,6 @@ function setup(ctx) {
     };
 }
 };
-
 __modules["./history"] = function(module, exports, require) {
 "use strict";
 // Durable Shutter generation-history data shared by the frontend and backend.
@@ -1351,6 +1406,7 @@ exports.promptViewFromRecord = promptViewFromRecord;
 exports.promptViewFromEmbedded = promptViewFromEmbedded;
 exports.humanisePromptMode = humanisePromptMode;
 exports.humaniseGenerationOrigin = humaniseGenerationOrigin;
+exports.formatPromptMetadataLine = formatPromptMetadataLine;
 exports.formatPromptMetadataForClipboard = formatPromptMetadataForClipboard;
 const SHUTTER_IMAGE_GLOBAL_RE = /\n*!\[shutter\]\(\/api\/v1\/(?:images|image-gen\/results)\/[a-f0-9-]+\)/gi;
 function normaliseSwipeContent(content) {
@@ -1381,6 +1437,8 @@ function promptViewFromRecord(record) {
         createdAt: record.createdAt,
         promptMode: record.promptMode,
         origin: record.origin,
+        provider: record.provider,
+        model: record.model,
     };
 }
 function promptViewFromEmbedded(prompt, negativePrompt) {
@@ -1404,6 +1462,16 @@ function humaniseGenerationOrigin(origin) {
         default: return 'Manual generation';
     }
 }
+function formatPromptMetadataLine(view) {
+    const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
+    if (view.createdAt)
+        details.push(new Date(view.createdAt).toLocaleString());
+    if (view.provider)
+        details.push(`Provider: ${view.provider}`);
+    if (view.model)
+        details.push(`Model: ${view.model}`);
+    return details.join(' · ');
+}
 function formatPromptMetadataForClipboard(view) {
     const lines = ['Positive Prompt', view.prompt];
     if (view.negativePrompt)
@@ -1411,7 +1479,6 @@ function formatPromptMetadataForClipboard(view) {
     return lines.join('\n');
 }
 };
-
 __modules["./icons"] = function(module, exports, require) {
 "use strict";
 // Shutter icon SVG paths. The mono and colour variants share identical geometry
@@ -1542,7 +1609,6 @@ function getIconSet(iconId) {
     return exports.ICON_SETS[iconId] ?? exports.ICON_SETS.aperture;
 }
 };
-
 __modules["./lightbox"] = function(module, exports, require) {
 "use strict";
 // The lightbox prompt label: click-driven detection of the native image
@@ -2004,17 +2070,11 @@ function createLightboxPromptLabel(deps) {
             <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
           </div>`
                 : '';
-            const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
-            if (view.createdAt)
-                details.push(new Date(view.createdAt).toLocaleString());
-            if (view.promptMode)
-                details.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
-            if (view.origin)
-                details.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
+            const details = (0, history_1.formatPromptMetadataLine)(view);
             const negativeBlock = view.negativePrompt
                 ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
                 : '';
-            return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
+            return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details)}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
         }
         // Inject a stable shell immediately — or, when metadata already settled,
         // the finished label directly. The shell avoids the jarring delayed box
@@ -2737,7 +2797,6 @@ function createLightboxPromptLabel(deps) {
     };
 }
 };
-
 __modules["./metadata"] = function(module, exports, require) {
 "use strict";
 // Image-metadata resolution: PNG text-chunk parsing and provider prompt
@@ -2906,7 +2965,6 @@ function extractImageId(src) {
     return match ? match[1] : null;
 }
 };
-
 __modules["./modals"] = function(module, exports, require) {
 "use strict";
 // Shutter's modal surfaces: the post-generation destination modal, the
@@ -3050,14 +3108,7 @@ function createModals(deps) {
                 button.classList.toggle('sh-active', selected);
                 button.setAttribute('aria-selected', String(selected));
             });
-            const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
-            if (view.createdAt)
-                details.push(new Date(view.createdAt).toLocaleString());
-            if (view.promptMode)
-                details.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
-            if (view.origin)
-                details.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
-            meta.textContent = details.join(' · ');
+            meta.textContent = (0, history_1.formatPromptMetadataLine)(view);
             fields.replaceChildren();
             fields.classList.toggle('sh-no-negative', !view.negativePrompt);
             fields.appendChild(makeReadonlyPromptField('Positive Prompt', view.prompt || 'Prompt unavailable', 'positive'));
@@ -3186,6 +3237,8 @@ function createModals(deps) {
             negativePrompt: result.negativePrompt,
             promptMode: result.promptMode,
             origin: isAuto ? 'auto' : 'manual',
+            provider: result.provider,
+            model: result.model,
             target,
         };
         const history = historyEnabled ? [...storedHistory] : [fallbackRecord];
@@ -3529,12 +3582,7 @@ function createModals(deps) {
             count.textContent = `${idx + 1} / ${history.length}`;
             prev.disabled = committing || idx === 0;
             next.disabled = committing || idx === history.length - 1;
-            const metaParts = [new Date(entry.createdAt).toLocaleString()];
-            if (entry.promptMode)
-                metaParts.push(`Mode: ${(0, history_1.humanisePromptMode)(entry.promptMode)}`);
-            if (entry.origin)
-                metaParts.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(entry.origin)}`);
-            summary.textContent = metaParts.join(' · ');
+            summary.textContent = (0, history_1.formatPromptMetadataLine)((0, history_1.promptViewFromRecord)(entry));
             if (activeLightbox) {
                 const lightboxImage = activeLightbox.overlay.querySelector('img');
                 if (lightboxImage)
@@ -3835,7 +3883,6 @@ function createModals(deps) {
     };
 }
 };
-
 __modules["./settings-panel"] = function(module, exports, require) {
 "use strict";
 // The extension settings panel (mount-once pattern): host shared components
@@ -4326,7 +4373,6 @@ function createSettingsPanel(deps) {
     };
 }
 };
-
 __modules["./settings"] = function(module, exports, require) {
 "use strict";
 // Shared settings model — the single source of truth for Shutter's settings
@@ -4413,7 +4459,6 @@ function validateSettings(s) {
     return out;
 }
 };
-
 __modules["./styles"] = function(module, exports, require) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.

@@ -377,59 +377,83 @@ spindle.onFrontendMessage(async (raw, userId) => {
                 break;
             }
             case 'insert_into_message': {
+                const reply = (success, changed, error) => {
+                    if (!payload.requestId)
+                        return;
+                    spindle.sendToFrontend({
+                        type: 'insert_result',
+                        requestId: payload.requestId,
+                        success,
+                        changed,
+                        error,
+                    }, userId);
+                };
+                const fail = (message, level = 'error') => {
+                    spindle.toast[level](message, { userId });
+                    reply(false, false, message);
+                };
                 if (!spindle.permissions.has('chat_mutation')) {
-                    spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId });
-                    return;
+                    fail('Grant the "Chat Mutation" permission to insert images into messages.', 'warning');
+                    break;
                 }
-                const messages = await spindle.chat.getMessages(payload.chatId);
-                const requestedId = payload.target?.messageId ?? payload.messageId;
-                const { target: message, error } = resolveTarget(messages, requestedId);
-                if (!message) {
-                    spindle.toast.error(error || 'Message not found.', { userId });
-                    return;
-                }
-                const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id;
-                if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
-                    spindle.toast.error('The message response used for this generation no longer exists.', { userId });
-                    return;
-                }
-                const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
-                let baseContent = message.swipes[swipeIndex] ?? message.content;
-                let didReplace = false;
-                if (payload.replace) {
-                    const stripped = payload.replaceImageId
-                        ? stripShutterImageById(baseContent, payload.replaceImageId)
-                        : stripLastShutterImage(baseContent);
-                    if (payload.replaceImageId && !stripped.found) {
-                        spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
-                        return;
+                try {
+                    const messages = await spindle.chat.getMessages(payload.chatId);
+                    const requestedId = payload.target?.messageId ?? payload.messageId;
+                    const { target: message, error } = resolveTarget(messages, requestedId);
+                    if (!message) {
+                        fail(error || 'Message not found.');
+                        break;
                     }
-                    baseContent = stripped.content;
-                    didReplace = stripped.found;
-                }
-                // A selected history image may already exist elsewhere in the same
-                // response. In replace mode, removing the exact source image is still
-                // the requested mutation, so avoid adding a duplicate. In insert mode,
-                // retain the existing no-op behaviour.
-                if (containsShutterImageId(baseContent, payload.imageId)) {
-                    if (!didReplace) {
-                        spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
-                        return;
+                    const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id;
+                    if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
+                        fail('The message response used for this generation no longer exists.');
+                        break;
                     }
+                    const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
+                    let baseContent = message.swipes[swipeIndex] ?? message.content;
+                    let didReplace = false;
+                    if (payload.replace) {
+                        const stripped = payload.replaceImageId
+                            ? stripShutterImageById(baseContent, payload.replaceImageId)
+                            : stripLastShutterImage(baseContent);
+                        if (payload.replaceImageId && !stripped.found) {
+                            fail('The image selected for replacement is no longer in that message response.');
+                            break;
+                        }
+                        baseContent = stripped.content;
+                        didReplace = stripped.found;
+                    }
+                    // A selected history image may already exist elsewhere in the same
+                    // response. In replace mode, removing the exact source image is still
+                    // the requested mutation, so avoid adding a duplicate. In insert mode,
+                    // retain the existing no-op behaviour.
+                    if (containsShutterImageId(baseContent, payload.imageId)) {
+                        if (!didReplace) {
+                            spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
+                            reply(true, false);
+                            break;
+                        }
+                    }
+                    else {
+                        baseContent += `\n\n![shutter](${imageUrl})`;
+                    }
+                    const swipes = [...message.swipes];
+                    swipes[swipeIndex] = baseContent;
+                    await spindle.chat.updateMessage(payload.chatId, message.id, {
+                        swipes,
+                        swipe_dates: [...message.swipe_dates],
+                        swipe_id: message.swipe_id,
+                    });
+                    const settings = await loadSettings(userId);
+                    if (settings.toastOnInsert) {
+                        spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId });
+                    }
+                    reply(true, true);
                 }
-                else {
-                    baseContent += `\n\n![shutter](${imageUrl})`;
-                }
-                const swipes = [...message.swipes];
-                swipes[swipeIndex] = baseContent;
-                await spindle.chat.updateMessage(payload.chatId, message.id, {
-                    swipes,
-                    swipe_dates: [...message.swipe_dates],
-                    swipe_id: message.swipe_id,
-                });
-                const settings = await loadSettings(userId);
-                if (settings.toastOnInsert) {
-                    spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId });
+                catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    spindle.log.error(`[insert_into_message] ${message}`);
+                    fail('Could not update the message response.');
                 }
                 break;
             }
@@ -516,6 +540,7 @@ if (!spindle.permissions.has('interceptor')) {
 }
 spindle.log.info('Shutter loaded!');
 };
+
 __modules["./comms"] = function(module, exports, require) {
 "use strict";
 // Spindle message-channel round-trips, correlated by requestId with timeout
@@ -553,6 +578,9 @@ function createComms(ctx) {
     function clearGenerationHistory() {
         return request('clear', 'clear_generation_history', {}, false, 15000);
     }
+    function insertIntoMessage(payload) {
+        return request('insert', 'insert_into_message', payload, { success: false, changed: false }, 15000);
+    }
     // Returns true when the payload was a comms round-trip reply (consumed).
     function handleBackendMessage(payload) {
         if (!payload || typeof payload.requestId !== 'string')
@@ -564,7 +592,8 @@ function createComms(ctx) {
             || (payload.type === 'shutter_tag' && entry.kind === 'tag')
             || (payload.type === 'generation_history' && entry.kind === 'history')
             || (payload.type === 'generation_record' && entry.kind === 'record')
-            || (payload.type === 'history_cleared' && entry.kind === 'clear');
+            || (payload.type === 'history_cleared' && entry.kind === 'clear')
+            || (payload.type === 'insert_result' && entry.kind === 'insert');
         if (!matches)
             return false;
         clearTimeout(entry.timeout);
@@ -581,6 +610,9 @@ function createComms(ctx) {
         else if (payload.type === 'generation_record') {
             entry.resolve(payload.record ?? null);
         }
+        else if (payload.type === 'insert_result') {
+            entry.resolve({ success: payload.success === true, changed: payload.changed === true });
+        }
         else {
             entry.resolve(true);
         }
@@ -593,6 +625,8 @@ function createComms(ctx) {
                 entry.resolve([]);
             else if (entry.kind === 'clear')
                 entry.resolve(false);
+            else if (entry.kind === 'insert')
+                entry.resolve({ success: false, changed: false });
             else
                 entry.resolve(null);
             pending.delete(requestId);
@@ -605,11 +639,13 @@ function createComms(ctx) {
         getGenerationHistory,
         getGenerationRecord,
         clearGenerationHistory,
+        insertIntoMessage,
         handleBackendMessage,
         dispose,
     };
 }
 };
+
 __modules["./frontend"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1304,6 +1340,7 @@ function setup(ctx) {
     };
 }
 };
+
 __modules["./history"] = function(module, exports, require) {
 "use strict";
 // Durable Shutter generation-history data shared by the frontend and backend.
@@ -1376,6 +1413,7 @@ function formatPromptMetadataForClipboard(view) {
     return lines.join('\n');
 }
 };
+
 __modules["./icons"] = function(module, exports, require) {
 "use strict";
 // Shutter icon SVG paths. The mono and colour variants share identical geometry
@@ -1506,6 +1544,7 @@ function getIconSet(iconId) {
     return exports.ICON_SETS[iconId] ?? exports.ICON_SETS.aperture;
 }
 };
+
 __modules["./lightbox"] = function(module, exports, require) {
 "use strict";
 // The lightbox prompt label: click-driven detection of the native image
@@ -1599,11 +1638,8 @@ function createLightboxPromptLabel(deps) {
     const PROMPT_EXPANDED_MAX = 480;
     const PROMPT_MOBILE_EXPANDED_MAX = 260;
     const PROMPT_PILL_HEIGHT = 44;
-    // The compact strip now exposes History, Prompt, and Copy directly. Let it
-    // use the available lightbox width (bounded by the viewport) rather than
-    // forcing those actions into the old Prompt/View/Copy-sized pill.
-    const PROMPT_PILL_DESKTOP_WIDTH = 520;
-    const PROMPT_PILL_MOBILE_WIDTH = 520;
+    // The compact strip is content-width; expanded prompt sizing still uses
+    // the image-aware desktop/mobile bounds above.
     // Seed value for the expanded reserve only — the live value is measured
     // from the panel's actual rendered height (content-aware) at expand time.
     const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE; // 176
@@ -2201,33 +2237,44 @@ function createLightboxPromptLabel(deps) {
             const promptMaxHeight = isExpanded ? getPromptMaxHeight(rectHeight > 0 ? rectHeight : undefined) : PROMPT_PILL_HEIGHT;
             const isCompact = isCompactPromptLayout();
             const viewportMax = viewportWidthLocal - EDGE * 2;
-            const pillWidth = Math.min(isCompact ? PROMPT_PILL_MOBILE_WIDTH : PROMPT_PILL_DESKTOP_WIDTH, viewportMax);
-            const width = !isExpanded
-                ? pillWidth
-                : (rect.width === 0 || rect.height === 0
-                    ? (isCompact
-                        ? Math.min(PROMPT_MOBILE_MAX_WIDTH, viewportMax)
-                        : Math.min(PROMPT_DESKTOP_MIN_WIDTH, viewportMax))
-                    : (isCompact
-                        ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
-                        : Math.min(Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH), PROMPT_DESKTOP_MAX_WIDTH, viewportMax)));
+            const expandedWidth = rect.width === 0 || rect.height === 0
+                ? (isCompact
+                    ? Math.min(PROMPT_MOBILE_MAX_WIDTH, viewportMax)
+                    : Math.min(PROMPT_DESKTOP_MIN_WIDTH, viewportMax))
+                : (isCompact
+                    ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
+                    : Math.min(Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH), PROMPT_DESKTOP_MAX_WIDTH, viewportMax));
+            // Collapsed mode is a true content-width toolbar. Write fit-content
+            // before measuring so inherited or previously-expanded widths cannot
+            // stretch it across the lightbox.
+            if (!isExpanded) {
+                setStyleIfChanged(ws, 'width', 'fit-content');
+                setStyleIfChanged(ws, 'min-width', '0px');
+                setStyleIfChanged(ws, 'max-width', `${viewportMax}px`);
+            }
+            else {
+                setStyleIfChanged(ws, 'width', `${expandedWidth}px`);
+                setStyleIfChanged(ws, 'min-width', '0px');
+                setStyleIfChanged(ws, 'max-width', `${viewportMax}px`);
+            }
             if (rect.width === 0 || rect.height === 0) {
                 // Native lightbox mounts the <img> before it has natural dimensions.
                 // Keep the loading shell visible near the spinner until the image has
                 // a real rect, then snap it under the image.
                 setStyleIfChanged(ws, 'top', 'calc(50% + 48px)');
                 setStyleIfChanged(ws, 'left', '50%');
-                setStyleIfChanged(ws, 'width', `${width}px`);
                 setStyleIfChanged(ws, 'transform', 'translateX(-50%)');
                 if (labelEl) {
                     setStyleIfChanged(labelEl.style, 'max-height', `${promptMaxHeight}px`);
                 }
                 return;
             }
-            const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - width) / 2, viewportWidthLocal - width - EDGE));
+            const measuredWidth = isExpanded
+                ? expandedWidth
+                : Math.min(wrapper.getBoundingClientRect().width / uiScale, viewportMax);
+            const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - measuredWidth) / 2, viewportWidthLocal - measuredWidth - EDGE));
             setStyleIfChanged(ws, 'top', `${rectBottom + GAP}px`);
             setStyleIfChanged(ws, 'left', `${left}px`);
-            setStyleIfChanged(ws, 'width', `${width}px`);
             setStyleIfChanged(ws, 'transform', '');
             if (labelEl) {
                 setStyleIfChanged(labelEl.style, 'max-height', `${promptMaxHeight}px`);
@@ -2540,7 +2587,7 @@ function createLightboxPromptLabel(deps) {
             historyBtn.hidden = resolved.history.length === 0;
             historyBtn.disabled = resolved.history.length === 0;
             historyBtn.textContent = resolved.history.length > 0
-                ? `View History${resolved.history.length > 1 ? ` · ${resolved.history.length}` : ''}`
+                ? `View History · ${resolved.history.length}`
                 : 'View History';
         }
         if (viewBtn) {
@@ -2692,6 +2739,7 @@ function createLightboxPromptLabel(deps) {
     };
 }
 };
+
 __modules["./metadata"] = function(module, exports, require) {
 "use strict";
 // Image-metadata resolution: PNG text-chunk parsing and provider prompt
@@ -2860,6 +2908,7 @@ function extractImageId(src) {
     return match ? match[1] : null;
 }
 };
+
 __modules["./modals"] = function(module, exports, require) {
 "use strict";
 // Shutter's modal surfaces: the post-generation destination modal, the
@@ -2876,6 +2925,7 @@ const history_1 = require("./history");
 function createModals(deps) {
     const { ctx, comms } = deps;
     let promptPreviewOpen = false;
+    const modalInputStack = [];
     // ── Modals ──
     // ── Lightbox state (for cleanup) ──
     let activeLightbox = null;
@@ -2902,14 +2952,22 @@ function createModals(deps) {
     // their arrow-key default is not prevented.
     function isolateModalInput(modal, options = {}) {
         const blockArrows = options.blockArrows !== false;
+        const stackToken = Symbol('shutter-modal-input');
+        modalInputStack.push(stackToken);
+        const isTopModal = () => modalInputStack[modalInputStack.length - 1] === stackToken;
         const keyBlocker = (e) => {
+            if (!isTopModal())
+                return;
             if (e.key === 'Escape') {
                 // The preview lightbox is the foreground surface and owns Escape.
                 if (activeLightbox)
                     return;
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                modal.dismiss();
+                if (options.onEscape)
+                    options.onEscape();
+                else
+                    modal.dismiss();
                 return;
             }
             if (!blockArrows || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight'))
@@ -2937,7 +2995,146 @@ function createModals(deps) {
             modal.root.removeEventListener('touchend', touchBlocker);
             modal.root.removeEventListener('touchcancel', touchBlocker);
             window.removeEventListener('keydown', keyBlocker, { capture: true });
+            const stackIndex = modalInputStack.lastIndexOf(stackToken);
+            if (stackIndex >= 0)
+                modalInputStack.splice(stackIndex, 1);
         });
+    }
+    function mountModalHeaderClose(modal, onClick) {
+        const hostBody = modal.root.parentElement;
+        const hostHeader = hostBody?.previousElementSibling;
+        if (!(hostHeader instanceof HTMLElement))
+            return;
+        const slot = document.createElement('span');
+        slot.className = 'sh-modal-header-close-slot';
+        hostHeader.appendChild(slot);
+        const handle = ctx.components.mountCloseButton(slot, {
+            onClick,
+            size: 'sm',
+            variant: 'subtle',
+            ariaLabel: 'Close',
+        });
+        modal.onDismiss(() => handle.destroy());
+    }
+    function constrainImagePromptModal(modal) {
+        const hostBody = modal.root.parentElement;
+        if (hostBody instanceof HTMLElement) {
+            hostBody.style.overflowY = 'hidden';
+            hostBody.style.minHeight = '0';
+            hostBody.style.display = 'flex';
+            hostBody.style.flexDirection = 'column';
+        }
+        modal.root.classList.add('sh-image-prompt-root');
+    }
+    function makeReadonlyPromptField(label, text, kind) {
+        const field = document.createElement('div');
+        field.className = `sh-prompt-field sh-image-prompt-field sh-image-prompt-field-${kind}`;
+        const heading = document.createElement('div');
+        heading.className = 'sh-prompt-label';
+        heading.textContent = label;
+        const block = document.createElement('div');
+        block.className = 'sh-prompt-readonly sh-image-prompt-readonly';
+        block.textContent = text;
+        field.append(heading, block);
+        return field;
+    }
+    function setCopyFeedback(button, view) {
+        navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(view)).then(() => {
+            button.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
+            button.classList.add('sh-copied');
+            setTimeout(() => {
+                if (!button.isConnected)
+                    return;
+                button.textContent = 'Copy Prompt';
+                button.classList.remove('sh-copied');
+            }, 2000);
+        }).catch(() => {
+            button.textContent = 'Failed';
+            setTimeout(() => { if (button.isConnected)
+                button.textContent = 'Copy Prompt'; }, 1200);
+        });
+    }
+    function renderImagePromptSurface(modal, options) {
+        constrainImagePromptModal(modal);
+        modal.setTitle('Image Prompt');
+        let activeView = options.initialView;
+        const body = document.createElement('div');
+        body.className = 'sh-prompt-body sh-image-prompt-body';
+        const sourceSlot = document.createElement('div');
+        const meta = document.createElement('div');
+        meta.className = 'sh-prompt-source-meta sh-image-prompt-meta';
+        const fields = document.createElement('div');
+        fields.className = 'sh-prompt-source-fields sh-image-prompt-fields';
+        const renderView = (view) => {
+            activeView = view;
+            sourceSlot.querySelectorAll('.sh-prompt-source-btn').forEach(button => {
+                const selected = button.dataset.source === view.source;
+                button.classList.toggle('sh-active', selected);
+                button.setAttribute('aria-selected', String(selected));
+            });
+            const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
+            if (view.createdAt)
+                details.push(new Date(view.createdAt).toLocaleString());
+            if (view.promptMode)
+                details.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
+            if (view.origin)
+                details.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
+            meta.textContent = details.join(' · ');
+            fields.replaceChildren();
+            fields.classList.toggle('sh-no-negative', !view.negativePrompt);
+            fields.appendChild(makeReadonlyPromptField('Positive Prompt', view.prompt || 'Prompt unavailable', 'positive'));
+            if (view.negativePrompt) {
+                fields.appendChild(makeReadonlyPromptField('Negative Prompt', view.negativePrompt, 'negative'));
+            }
+        };
+        const shutterView = options.shutterView ?? null;
+        const embeddedView = options.embeddedView ?? null;
+        if (shutterView && embeddedView) {
+            sourceSlot.className = 'sh-prompt-source-tabs';
+            sourceSlot.setAttribute('role', 'tablist');
+            sourceSlot.setAttribute('aria-label', 'Prompt metadata source');
+            for (const [source, label, view] of [
+                ['shutter', 'Shutter', shutterView],
+                ['embedded', 'Embedded', embeddedView],
+            ]) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'sh-prompt-source-btn';
+                button.dataset.source = source;
+                button.textContent = label;
+                button.setAttribute('role', 'tab');
+                button.addEventListener('click', () => renderView(view));
+                sourceSlot.appendChild(button);
+            }
+            body.appendChild(sourceSlot);
+        }
+        body.append(meta, fields);
+        const actions = document.createElement('div');
+        actions.className = 'sh-prompt-actions sh-image-prompt-actions';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', options.onClose);
+        actions.appendChild(closeBtn);
+        if (options.onViewHistory && options.historyLabel) {
+            const historyBtn = document.createElement('button');
+            historyBtn.type = 'button';
+            historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+            historyBtn.textContent = options.historyLabel;
+            historyBtn.title = 'View generation history for this message response';
+            historyBtn.addEventListener('click', options.onViewHistory);
+            actions.appendChild(historyBtn);
+        }
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+        copyBtn.textContent = 'Copy Prompt';
+        copyBtn.addEventListener('click', () => setCopyFeedback(copyBtn, activeView));
+        actions.appendChild(copyBtn);
+        body.appendChild(actions);
+        modal.root.replaceChildren(body);
+        renderView(activeView);
     }
     function openLightbox(src) {
         // Dismiss any existing lightbox first
@@ -3192,17 +3389,31 @@ function createModals(deps) {
         choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
             void regenerateFromSelected();
         }));
-        choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
-            ctx.sendToBackend({
-                type: 'insert_into_message',
+        const insertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+            if (insertBtn.getAttribute('aria-busy') === 'true')
+                return;
+            insertBtn.setAttribute('aria-busy', 'true');
+            for (const button of Array.from(choices.querySelectorAll('button')))
+                button.disabled = true;
+            void comms.insertIntoMessage({
                 imageId: current().imageId,
                 messageId: target.messageId,
                 chatId: target.chatId,
                 target,
                 replace: replaceChecked,
+            }).then(result => {
+                if (!modal.root.isConnected)
+                    return;
+                if (result.success) {
+                    modal.dismiss();
+                    return;
+                }
+                insertBtn.removeAttribute('aria-busy');
+                for (const button of Array.from(choices.querySelectorAll('button')))
+                    button.disabled = false;
             });
-            modal.dismiss();
-        }));
+        });
+        choices.appendChild(insertBtn);
         container.appendChild(choices);
         modal.root.appendChild(container);
         renderHistory();
@@ -3215,7 +3426,7 @@ function createModals(deps) {
         });
     }
     let activeHistoryViewerModal = null;
-    function openHistoryViewer(records, initialImageId, closeUnderlyingLightbox) {
+    function openHistoryViewer(records, initialImageId, closeUnderlyingLightbox, closeParentPrompt) {
         const history = [...records].sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId));
         if (history.length === 0)
             return;
@@ -3224,14 +3435,21 @@ function createModals(deps) {
         if (idx < 0)
             idx = history.length - 1;
         const current = () => history[idx];
-        // Match the Image Generated modal's shell, width, preview sizing, and
-        // footer placement. History is an image-selection surface; the full
-        // prompt belongs in the focused read-only viewer opened from View Prompt.
+        // This is the second and final physical modal in the widget flow. The
+        // history prompt reuses this handle by swapping its body and title, so the
+        // logical three-level flow never exceeds Spindle's two-modal limit.
         const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true });
         activeHistoryViewerModal = modal;
-        isolateModalInput(modal, { blockArrows: false });
-        let promptModal = null;
-        let historyPromptOpen = false;
+        let surface = 'history';
+        let committing = false;
+        const closeCurrentSurface = () => {
+            if (surface === 'prompt')
+                renderHistorySurface();
+            else
+                modal.dismiss();
+        };
+        isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface });
+        mountModalHeaderClose(modal, closeCurrentSurface);
         const container = document.createElement('div');
         container.className = 'sh-modal-body';
         const previewWrap = document.createElement('div');
@@ -3270,89 +3488,36 @@ function createModals(deps) {
         viewPromptBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
         viewPromptBtn.textContent = 'View Prompt';
         viewPromptBtn.title = 'View and copy the prompt saved for this generation';
-        const makeReadonlyField = (label, text, short = false) => {
-            const field = document.createElement('div');
-            field.className = 'sh-prompt-field';
-            const heading = document.createElement('div');
-            heading.className = 'sh-prompt-label';
-            heading.textContent = label;
-            const block = document.createElement('div');
-            block.className = short ? 'sh-prompt-readonly sh-prompt-readonly-short' : 'sh-prompt-readonly';
-            block.textContent = text;
-            field.append(heading, block);
-            return field;
-        };
-        const openSelectedPrompt = () => {
-            if (historyPromptOpen)
+        viewPromptBtn.addEventListener('click', () => {
+            if (committing)
                 return;
-            historyPromptOpen = true;
-            viewPromptBtn.disabled = true;
-            const view = (0, history_1.promptViewFromRecord)(current());
-            const viewer = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true });
-            promptModal = viewer;
-            isolateModalInput(viewer);
-            const body = document.createElement('div');
-            body.className = 'sh-prompt-body';
-            const subtitle = document.createElement('p');
-            subtitle.className = 'sh-prompt-subtitle';
-            subtitle.textContent = 'The exact prompt saved by Shutter for this generation.';
-            body.appendChild(subtitle);
-            const meta = document.createElement('div');
-            meta.className = 'sh-prompt-source-meta';
-            const metaParts = ['Saved by Shutter'];
-            if (view.createdAt)
-                metaParts.push(new Date(view.createdAt).toLocaleString());
-            if (view.promptMode)
-                metaParts.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
-            if (view.origin)
-                metaParts.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
-            meta.textContent = metaParts.join(' · ');
-            body.appendChild(meta);
-            body.appendChild(makeReadonlyField('Prompt', view.prompt || 'Prompt unavailable'));
-            if (view.negativePrompt)
-                body.appendChild(makeReadonlyField('Negative Prompt', view.negativePrompt, true));
-            const promptActions = document.createElement('div');
-            promptActions.className = 'sh-prompt-actions';
-            const promptCloseBtn = document.createElement('button');
-            promptCloseBtn.type = 'button';
-            promptCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
-            promptCloseBtn.textContent = 'Close';
-            promptCloseBtn.addEventListener('click', () => viewer.dismiss());
-            const copyBtn = document.createElement('button');
-            copyBtn.type = 'button';
-            copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-            copyBtn.textContent = 'Copy Prompt';
-            copyBtn.addEventListener('click', () => {
-                navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(view)).then(() => {
-                    copyBtn.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
-                    copyBtn.classList.add('sh-copied');
-                    setTimeout(() => {
-                        if (!copyBtn.isConnected)
-                            return;
-                        copyBtn.textContent = 'Copy Prompt';
-                        copyBtn.classList.remove('sh-copied');
-                    }, 2000);
-                }).catch(() => {
-                    copyBtn.textContent = 'Failed';
-                    setTimeout(() => { if (copyBtn.isConnected)
-                        copyBtn.textContent = 'Copy Prompt'; }, 1200);
-                });
+            surface = 'prompt';
+            renderImagePromptSurface(modal, {
+                initialView: (0, history_1.promptViewFromRecord)(current()),
+                onClose: renderHistorySurface,
             });
-            promptActions.append(promptCloseBtn, copyBtn);
-            body.appendChild(promptActions);
-            viewer.root.appendChild(body);
-            viewer.onDismiss(() => {
-                historyPromptOpen = false;
-                promptModal = null;
-                if (viewPromptBtn.isConnected)
-                    viewPromptBtn.disabled = false;
-            });
+        });
+        const replaceBtn = document.createElement('button');
+        replaceBtn.type = 'button';
+        replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+        replaceBtn.textContent = 'Replace';
+        replaceBtn.title = 'Replace the image that opened Generation History';
+        const insertBtn = document.createElement('button');
+        insertBtn.type = 'button';
+        insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary';
+        insertBtn.textContent = 'Insert';
+        insertBtn.title = 'Insert this image into its original message response';
+        const setCommitDisabled = (disabled) => {
+            committing = disabled;
+            for (const button of [closeBtn, viewPromptBtn, replaceBtn, insertBtn, prev, next])
+                button.disabled = disabled;
         };
-        viewPromptBtn.addEventListener('click', openSelectedPrompt);
-        const commitSelected = (replace) => {
+        const commitSelected = async (replace) => {
+            if (committing)
+                return;
+            setCommitDisabled(true);
             const entry = current();
-            ctx.sendToBackend({
-                type: 'insert_into_message',
+            const result = await comms.insertIntoMessage({
                 imageId: entry.imageId,
                 messageId: entry.target.messageId,
                 chatId: entry.target.chatId,
@@ -3362,30 +3527,27 @@ function createModals(deps) {
                 // exact tag, not whichever Shutter image happens to be last now.
                 replaceImageId: replace ? initialImageId : undefined,
             });
+            if (!modal.root.isConnected)
+                return;
+            if (!result.success) {
+                setCommitDisabled(false);
+                render();
+                return;
+            }
             modal.dismiss();
+            closeParentPrompt?.();
             closeUnderlyingLightbox?.();
         };
-        const replaceBtn = document.createElement('button');
-        replaceBtn.type = 'button';
-        replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-        replaceBtn.textContent = 'Replace';
-        replaceBtn.title = 'Replace the image that opened Generation History';
-        replaceBtn.addEventListener('click', () => commitSelected(true));
-        const insertBtn = document.createElement('button');
-        insertBtn.type = 'button';
-        insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary';
-        insertBtn.textContent = 'Insert';
-        insertBtn.title = 'Insert this image into its original message response';
-        insertBtn.addEventListener('click', () => commitSelected(false));
+        replaceBtn.addEventListener('click', () => { void commitSelected(true); });
+        insertBtn.addEventListener('click', () => { void commitSelected(false); });
         actions.append(closeBtn, viewPromptBtn, replaceBtn, insertBtn);
         container.appendChild(actions);
-        modal.root.appendChild(container);
         function render() {
             const entry = current();
             preview.src = (0, history_1.imageUrlForHistoryRecord)(entry);
             count.textContent = `${idx + 1} / ${history.length}`;
-            prev.disabled = idx === 0;
-            next.disabled = idx === history.length - 1;
+            prev.disabled = committing || idx === 0;
+            next.disabled = committing || idx === history.length - 1;
             const metaParts = [new Date(entry.createdAt).toLocaleString()];
             if (entry.promptMode)
                 metaParts.push(`Mode: ${(0, history_1.humanisePromptMode)(entry.promptMode)}`);
@@ -3398,7 +3560,23 @@ function createModals(deps) {
                     lightboxImage.src = (0, history_1.imageUrlForHistoryRecord)(entry);
             }
         }
+        function renderHistorySurface() {
+            surface = 'history';
+            modal.setTitle('Generation History');
+            modal.root.classList.remove('sh-image-prompt-root');
+            const hostBody = modal.root.parentElement;
+            if (hostBody instanceof HTMLElement) {
+                hostBody.style.overflowY = 'auto';
+                hostBody.style.display = '';
+                hostBody.style.flexDirection = '';
+                hostBody.style.minHeight = '';
+            }
+            modal.root.replaceChildren(container);
+            render();
+        }
         const step = (direction) => {
+            if (surface !== 'history' || committing)
+                return;
             const nextIndex = idx + direction;
             if (nextIndex < 0 || nextIndex >= history.length)
                 return;
@@ -3408,9 +3586,11 @@ function createModals(deps) {
         prev.addEventListener('click', event => { event.stopPropagation(); step(-1); });
         next.addEventListener('click', event => { event.stopPropagation(); step(1); });
         const arrowHandler = (event) => {
+            if (surface !== 'history')
+                return;
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
                 return;
-            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || historyPromptOpen || isEditableTarget(event.target))
+            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target))
                 return;
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -3427,7 +3607,7 @@ function createModals(deps) {
             touchStartY = touch.clientY;
         }, { passive: true });
         previewWrap.addEventListener('touchend', event => {
-            if (historyPromptOpen)
+            if (surface !== 'history')
                 return;
             const touch = event.changedTouches[0];
             if (!touch)
@@ -3437,11 +3617,10 @@ function createModals(deps) {
             if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy))
                 step(dx < 0 ? 1 : -1);
         }, { passive: true });
-        render();
+        renderHistorySurface();
         modal.onDismiss(() => {
             if (activeHistoryViewerModal === modal)
                 activeHistoryViewerModal = null;
-            promptModal?.dismiss();
             dismissLightbox();
             window.removeEventListener('keydown', arrowHandler, { capture: true });
         });
@@ -3470,74 +3649,33 @@ function createModals(deps) {
         if (!chatId || promptViewerOpen)
             return;
         promptViewerOpen = true;
-        const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 });
+        const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true });
         activePromptViewerModal = modal;
-        isolateModalInput(modal);
         let dismissed = false;
-        let activeView = null;
-        const container = document.createElement('div');
-        container.className = 'sh-prompt-body';
-        const subtitle = document.createElement('p');
-        subtitle.className = 'sh-prompt-subtitle';
-        subtitle.textContent = 'Reading saved and embedded prompt metadata.';
-        container.appendChild(subtitle);
+        const closePrompt = () => modal.dismiss();
+        isolateModalInput(modal, { onEscape: closePrompt });
+        mountModalHeaderClose(modal, closePrompt);
+        constrainImagePromptModal(modal);
+        const loadingBody = document.createElement('div');
+        loadingBody.className = 'sh-prompt-body sh-image-prompt-body sh-image-prompt-loading-body';
         const status = document.createElement('div');
         status.className = 'sh-prompt-viewer-status';
         const spinnerSlot = document.createElement('span');
         const statusText = document.createElement('span');
         statusText.textContent = 'Reading prompt…';
-        status.appendChild(spinnerSlot);
-        status.appendChild(statusText);
-        container.appendChild(status);
+        status.append(spinnerSlot, statusText);
+        const loadingActions = document.createElement('div');
+        loadingActions.className = 'sh-prompt-actions sh-image-prompt-actions';
+        const loadingCloseBtn = document.createElement('button');
+        loadingCloseBtn.type = 'button';
+        loadingCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
+        loadingCloseBtn.textContent = 'Close';
+        loadingCloseBtn.addEventListener('click', closePrompt);
+        loadingActions.appendChild(loadingCloseBtn);
+        loadingBody.append(status, loadingActions);
+        modal.root.replaceChildren(loadingBody);
         let spinnerHandle = ctx.components.mountSpinner(spinnerSlot, { size: 14, fast: true });
         const destroySpinner = () => { spinnerHandle?.destroy(); spinnerHandle = null; };
-        const sourceSlot = document.createElement('div');
-        const fieldsSlot = document.createElement('div');
-        fieldsSlot.className = 'sh-prompt-source-fields';
-        const actions = document.createElement('div');
-        actions.className = 'sh-prompt-actions';
-        const copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-        copyBtn.textContent = 'Copy Prompt';
-        copyBtn.hidden = true;
-        copyBtn.addEventListener('click', () => {
-            if (!activeView)
-                return;
-            navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(activeView)).then(() => {
-                copyBtn.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
-                copyBtn.classList.add('sh-copied');
-                setTimeout(() => {
-                    if (!copyBtn.isConnected)
-                        return;
-                    copyBtn.textContent = 'Copy Prompt';
-                    copyBtn.classList.remove('sh-copied');
-                }, 2000);
-            }).catch(() => {
-                copyBtn.textContent = 'Failed';
-                setTimeout(() => { if (copyBtn.isConnected)
-                    copyBtn.textContent = 'Copy Prompt'; }, 1200);
-            });
-        });
-        const closeBtn = document.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
-        closeBtn.textContent = 'Close';
-        closeBtn.addEventListener('click', () => modal.dismiss());
-        const historyBtn = document.createElement('button');
-        historyBtn.type = 'button';
-        historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-        historyBtn.textContent = 'View History';
-        historyBtn.title = 'View generation history for this message response';
-        historyBtn.hidden = true;
-        // Follow Shutter's existing modal action pattern: content first, then a
-        // compact footer row. History is an action, not part of the scrollable
-        // prompt metadata body.
-        actions.append(closeBtn, historyBtn, copyBtn);
-        container.appendChild(sourceSlot);
-        container.appendChild(fieldsSlot);
-        container.appendChild(actions);
-        modal.root.appendChild(container);
         modal.onDismiss(() => {
             dismissed = true;
             destroySpinner();
@@ -3545,45 +3683,6 @@ function createModals(deps) {
             if (activePromptViewerModal === modal)
                 activePromptViewerModal = null;
         });
-        const makeField = (label, text, short = false) => {
-            const field = document.createElement('div');
-            field.className = 'sh-prompt-field';
-            const heading = document.createElement('div');
-            heading.className = 'sh-prompt-label';
-            heading.textContent = label;
-            const block = document.createElement('div');
-            block.className = short ? 'sh-prompt-readonly sh-prompt-readonly-short' : 'sh-prompt-readonly';
-            block.textContent = text;
-            field.appendChild(heading);
-            field.appendChild(block);
-            return field;
-        };
-        function renderSource(view) {
-            activeView = view;
-            sourceSlot.querySelectorAll('.sh-prompt-source-btn').forEach(button => {
-                button.classList.toggle('sh-active', button.dataset.source === view.source);
-                button.setAttribute('aria-selected', String(button.dataset.source === view.source));
-            });
-            subtitle.textContent = view.source === 'shutter'
-                ? 'The exact prompt saved by Shutter when this image was generated.'
-                : 'Prompt data read from metadata embedded in the image.';
-            fieldsSlot.innerHTML = '';
-            const meta = document.createElement('div');
-            meta.className = 'sh-prompt-source-meta';
-            const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
-            if (view.createdAt)
-                details.push(new Date(view.createdAt).toLocaleString());
-            if (view.promptMode)
-                details.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
-            if (view.origin)
-                details.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
-            meta.textContent = details.join(' · ');
-            fieldsSlot.appendChild(meta);
-            fieldsSlot.appendChild(makeField('Prompt', view.prompt));
-            if (view.negativePrompt)
-                fieldsSlot.appendChild(makeField('Negative Prompt', view.negativePrompt, true));
-            copyBtn.hidden = false;
-        }
         void (async () => {
             const tag = await comms.resolveShutterTag(chatId, '__last__', -1);
             if (dismissed)
@@ -3601,38 +3700,23 @@ function createModals(deps) {
             if (dismissed)
                 return;
             destroySpinner();
-            status.remove();
-            if (history.length > 0) {
-                historyBtn.hidden = false;
-                historyBtn.textContent = `View History · ${history.length}`;
-                historyBtn.addEventListener('click', () => {
-                    modal.dismiss();
-                    openHistoryViewer(history, tag.imageId);
-                }, { once: true });
-            }
             const shutterView = record ? (0, history_1.promptViewFromRecord)(record) : null;
             const embeddedView = embedded ? (0, history_1.promptViewFromEmbedded)(embedded.prompt, embedded.negativePrompt) : null;
-            if (!shutterView && !embeddedView) {
-                subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.';
+            const initialView = shutterView ?? embeddedView;
+            if (!initialView) {
+                statusText.textContent = 'No saved or embedded prompt metadata is available for this image.';
                 return;
             }
-            if (shutterView && embeddedView) {
-                sourceSlot.className = 'sh-prompt-source-tabs';
-                for (const [source, label] of [['shutter', 'Shutter'], ['embedded', 'Embedded']]) {
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'sh-prompt-source-btn';
-                    button.dataset.source = source;
-                    button.textContent = label;
-                    button.setAttribute('role', 'tab');
-                    button.addEventListener('click', () => renderSource(source === 'shutter' ? shutterView : embeddedView));
-                    sourceSlot.appendChild(button);
-                }
-            }
-            else {
-                sourceSlot.remove();
-            }
-            renderSource(shutterView ?? embeddedView);
+            renderImagePromptSurface(modal, {
+                initialView,
+                shutterView,
+                embeddedView,
+                onClose: closePrompt,
+                historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
+                onViewHistory: history.length > 0
+                    ? () => openHistoryViewer(history, tag.imageId, undefined, closePrompt)
+                    : undefined,
+            });
         })();
     }
     function openPromptPreviewModal(initialPrompt, initialNegative, target, isAuto = false, replace = false, origin = 'preview') {
@@ -3771,6 +3855,7 @@ function createModals(deps) {
     };
 }
 };
+
 __modules["./settings-panel"] = function(module, exports, require) {
 "use strict";
 // The extension settings panel (mount-once pattern): host shared components
@@ -4261,6 +4346,7 @@ function createSettingsPanel(deps) {
     };
 }
 };
+
 __modules["./settings"] = function(module, exports, require) {
 "use strict";
 // Shared settings model — the single source of truth for Shutter's settings
@@ -4347,6 +4433,7 @@ function validateSettings(s) {
     return out;
 }
 };
+
 __modules["./styles"] = function(module, exports, require) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.
@@ -4536,42 +4623,45 @@ exports.SHUTTER_CSS = `
       padding: 8px 0;
     }
 
-    /* One-source-at-a-time prompt metadata selector. In the compact native
-       lightbox toolbar this content is hidden with the rest of the prompt
-       body. The expanded control is deliberately compact: it chooses a
-       source, but should not visually compete with the prompt itself. */
+    /* Compact source controls shared by the modal and expanded lightbox. */
     .sh-prompt-source-tabs {
-      display: inline-grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      display: inline-flex;
+      align-items: center;
       align-self: flex-start;
-      width: min(100%, 320px);
-      gap: 2px;
-      padding: 2px;
-      margin-bottom: 8px;
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 7px);
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04));
+      width: fit-content;
+      max-width: 100%;
+      gap: 6px;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
     .sh-prompt-source-btn {
+      flex: 0 0 auto;
       min-width: 0;
       min-height: 28px;
-      padding: 4px 12px;
-      border: 0;
-      border-radius: 5px;
-      background: transparent;
+      padding: 4px 10px;
+      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+      border-radius: var(--lcs-radius-sm, 6px);
+      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       line-height: 1.2;
       cursor: pointer;
-      transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
-    .sh-prompt-source-btn:hover { color: var(--lumiverse-text, #eee); }
+    .sh-prompt-source-btn:hover {
+      color: var(--lumiverse-text, #eee);
+      border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
+    }
     .sh-prompt-source-btn.sh-active {
       background: var(--lumiverse-fill-heavy, rgba(255,255,255,0.1));
+      border-color: var(--lumiverse-primary-020, rgba(147,112,219,0.2));
       color: var(--lumiverse-text, #eee);
-      box-shadow: 0 1px 2px rgba(0,0,0,0.16);
     }
     .sh-prompt-source-meta {
       margin-bottom: 8px;
@@ -4580,9 +4670,63 @@ exports.SHUTTER_CSS = `
       line-height: 1.4;
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
-    @media (max-width: 560px) {
-      .sh-prompt-source-tabs { width: 100%; }
+
+    /* Image Prompt uses the host modal shell, but constrains the extension
+       body so only the prompt boxes scroll. Header and footer stay visible. */
+    .sh-image-prompt-root {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      width: 100%;
+      min-height: 0;
     }
+    .sh-image-prompt-body {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+      height: min(420px, calc(var(--app-scaled-viewport-height, 100dvh) - 132px));
+      max-height: 100%;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .sh-image-prompt-meta {
+      flex: 0 0 auto;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .sh-image-prompt-fields {
+      display: grid;
+      flex: 1 1 auto;
+      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
+      min-height: 0;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .sh-image-prompt-fields.sh-no-negative {
+      display: flex;
+    }
+    .sh-image-prompt-field {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .sh-image-prompt-field-positive { flex: 1 1 auto; }
+    .sh-image-prompt-readonly {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+      max-height: none;
+    }
+    .sh-image-prompt-actions {
+      flex: 0 0 auto;
+      margin-top: auto;
+    }
+    .sh-image-prompt-loading-body .sh-prompt-viewer-status {
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: center;
+    }
+    .sh-modal-header-close-slot { display: inline-flex; align-items: center; }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the
        portal) ── The wrapper is fixed-positioned via JS and deliberately
@@ -4591,6 +4735,9 @@ exports.SHUTTER_CSS = `
        Chromium re-capture the blur (intermittent unblurred-frame flash).
        See the injection site in decorateLightbox. */
     .sh-lightbox-prompt {
+      width: fit-content;
+      min-width: 0;
+      max-width: calc(var(--app-scaled-viewport-width, 100vw) - 24px);
       max-height: 156px;
       overflow: hidden;
       display: flex;
@@ -4726,9 +4873,11 @@ exports.SHUTTER_CSS = `
     .sh-lightbox-prompt-actions {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       margin-left: auto;
       flex: 0 0 auto;
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
     .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
       margin-left: 0;
@@ -4761,24 +4910,31 @@ exports.SHUTTER_CSS = `
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
     .sh-lightbox-prompt.sh-pill {
+      width: fit-content;
+      min-width: 0;
       height: var(--sh-prompt-pill-height, 44px);
       max-height: var(--sh-prompt-pill-height, 44px);
       min-height: var(--sh-prompt-pill-height, 44px);
-      padding: 8px 12px;
+      padding: 7px 9px;
       justify-content: center;
+      white-space: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-heading {
-      width: 100%;
+      width: auto;
+      min-width: 0;
       padding-bottom: 0;
       margin-bottom: 0;
       border-bottom: 0;
-      gap: 10px;
+      gap: 6px;
+      flex-wrap: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
-      width: 100%;
+      width: auto;
+      min-width: 0;
       justify-content: flex-end;
-      gap: 6px;
+      gap: 5px;
       margin-left: 0;
+      flex-wrap: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
@@ -4794,9 +4950,11 @@ exports.SHUTTER_CSS = `
       display: none !important;
     }
     .sh-lightbox-prompt.sh-expanded {
+      width: 100%;
       height: auto;
       min-height: 0;
     }
+    .sh-lightbox-prompt-content .sh-prompt-source-tabs { margin-bottom: 8px; }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;
     }
@@ -4805,6 +4963,7 @@ exports.SHUTTER_CSS = `
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
 };
+
 
 const __cache = Object.create(null);
 function __normalise(id) {

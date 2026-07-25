@@ -4803,6 +4803,8 @@ exports.SHUTTER_CSS = `
       gap: 4px;
       white-space: nowrap;
       flex-shrink: 0;
+      min-width: 6.25em;
+      justify-content: center;
       margin-left: auto;
       padding: 2px 8px;
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));

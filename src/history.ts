@@ -100,12 +100,7 @@ export function humaniseGenerationOrigin(origin?: GenerationOrigin): string {
 }
 
 export function formatPromptMetadataForClipboard(view: PromptMetadataView): string {
-  const lines: string[] = []
-  lines.push(`Source: ${view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'}`)
-  if (view.createdAt) lines.push(`Generated: ${new Date(view.createdAt).toLocaleString()}`)
-  if (view.promptMode) lines.push(`Prompt mode: ${humanisePromptMode(view.promptMode)}`)
-  if (view.origin) lines.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
-  lines.push('', 'Prompt', view.prompt)
-  if (view.negativePrompt) lines.push('', 'Negative prompt', view.negativePrompt)
+  const lines: string[] = ['Positive Prompt', view.prompt]
+  if (view.negativePrompt) lines.push('', 'Negative Prompt', view.negativePrompt)
   return lines.join('\n')
 }

@@ -185,10 +185,9 @@ export const SHUTTER_CSS = `
     }
 
     /* One-source-at-a-time prompt metadata selector. In the compact native
-       lightbox pill this content is hidden with the rest of the body, so the
-       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile.
-       The expanded control is deliberately compact: it chooses a source, but
-       should not visually compete with the prompt itself. */
+       lightbox toolbar this content is hidden with the rest of the prompt
+       body. The expanded control is deliberately compact: it chooses a
+       source, but should not visually compete with the prompt itself. */
     .sh-prompt-source-tabs {
       display: inline-grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -229,24 +228,6 @@ export const SHUTTER_CSS = `
       line-height: 1.4;
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
-    .sh-prompt-history-btn {
-      width: 100%;
-      margin: 0 0 10px;
-      padding: 8px 10px;
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.1));
-      border-radius: var(--lcs-radius-sm, 8px);
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.05));
-      color: var(--lumiverse-text, #eee);
-      font: inherit;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
-      cursor: pointer;
-      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
-    }
-    .sh-prompt-history-btn:hover {
-      background: var(--lumiverse-fill-medium, rgba(255,255,255,0.09));
-      border-color: var(--lumiverse-border-strong, rgba(255,255,255,0.18));
-    }
     @media (max-width: 560px) {
       .sh-prompt-source-tabs { width: 100%; }
     }
@@ -374,9 +355,6 @@ export const SHUTTER_CSS = `
     }
 
     .sh-lightbox-prompt [hidden] { display: none !important; }
-    .sh-lightbox-prompt-title {
-      flex: 0 0 auto;
-    }
     .sh-lightbox-prompt-status {
       display: inline-flex;
       align-items: center;
@@ -403,6 +381,7 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
       margin-left: 0;
     }
+    .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
     .sh-lightbox-prompt-collapse {
       display: inline-flex;
@@ -423,6 +402,7 @@ export const SHUTTER_CSS = `
       line-height: 1.4;
       cursor: pointer;
     }
+    .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
     .sh-lightbox-prompt-collapse:hover {
       color: var(--lumiverse-text, #eee);
@@ -441,6 +421,22 @@ export const SHUTTER_CSS = `
       margin-bottom: 0;
       border-bottom: 0;
       gap: 10px;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
+      width: 100%;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-left: 0;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy {
+      padding-inline: 6px;
+      font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close-slot {
+      margin-left: 2px;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {
       display: none !important;

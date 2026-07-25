@@ -1370,17 +1370,9 @@ function humaniseGenerationOrigin(origin) {
     }
 }
 function formatPromptMetadataForClipboard(view) {
-    const lines = [];
-    lines.push(`Source: ${view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'}`);
-    if (view.createdAt)
-        lines.push(`Generated: ${new Date(view.createdAt).toLocaleString()}`);
-    if (view.promptMode)
-        lines.push(`Prompt mode: ${humanisePromptMode(view.promptMode)}`);
-    if (view.origin)
-        lines.push(`Action: ${humaniseGenerationOrigin(view.origin)}`);
-    lines.push('', 'Prompt', view.prompt);
+    const lines = ['Positive Prompt', view.prompt];
     if (view.negativePrompt)
-        lines.push('', 'Negative prompt', view.negativePrompt);
+        lines.push('', 'Negative Prompt', view.negativePrompt);
     return lines.join('\n');
 }
 };
@@ -1607,8 +1599,11 @@ function createLightboxPromptLabel(deps) {
     const PROMPT_EXPANDED_MAX = 480;
     const PROMPT_MOBILE_EXPANDED_MAX = 260;
     const PROMPT_PILL_HEIGHT = 44;
-    const PROMPT_PILL_DESKTOP_WIDTH = 360;
-    const PROMPT_PILL_MOBILE_WIDTH = 320;
+    // The compact strip now exposes History, Prompt, and Copy directly. Let it
+    // use the available lightbox width (bounded by the viewport) rather than
+    // forcing those actions into the old Prompt/View/Copy-sized pill.
+    const PROMPT_PILL_DESKTOP_WIDTH = 520;
+    const PROMPT_PILL_MOBILE_WIDTH = 520;
     // Seed value for the expanded reserve only — the live value is measured
     // from the panel's actual rendered height (content-aware) at expand time.
     const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE; // 176
@@ -1985,10 +1980,7 @@ function createLightboxPromptLabel(deps) {
             const negativeBlock = view.negativePrompt
                 ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
                 : '';
-            const historyButton = sources.history.length > 0
-                ? `<button type="button" class="sh-prompt-history-btn">View History · ${sources.history.length}</button>`
-                : '';
-            return `${selector}${historyButton}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
+            return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
         }
         // Inject a stable shell immediately — or, when metadata already settled,
         // the finished label directly. The shell avoids the jarring delayed box
@@ -2009,12 +2001,12 @@ function createLightboxPromptLabel(deps) {
         const wrapper = ctx.dom.inject(document.body, `
       <div class="sh-lightbox-prompt sh-pill sh-loading" aria-live="polite">
         <div class="sh-lightbox-prompt-heading">
-          <span class="sh-lightbox-prompt-title">Prompt</span>
           <span class="sh-lightbox-prompt-status"><span class="sh-lightbox-prompt-spinner-slot" aria-hidden="true"></span><span>Reading prompt…</span></span>
           <span class="sh-lightbox-prompt-actions">
-            <button class="sh-lightbox-prompt-view" type="button" title="View prompt metadata" aria-label="View prompt metadata" hidden disabled>View</button>
-            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt metadata" aria-label="Collapse prompt metadata" hidden disabled>Collapse</button>
-            <button class="sh-lightbox-prompt-copy" type="button" title="Copy visible metadata" aria-label="Copy visible metadata" hidden disabled>Copy</button>
+            <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>View History</button>
+            <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View Prompt</button>
+            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse Prompt</button>
+            <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy Prompt</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
         </div>
@@ -2081,6 +2073,7 @@ function createLightboxPromptLabel(deps) {
         const scrollEl = wrapper.querySelector('.sh-lightbox-prompt-scroll');
         const contentEl = wrapper.querySelector('.sh-lightbox-prompt-content');
         const statusEl = wrapper.querySelector('.sh-lightbox-prompt-status');
+        const historyBtn = wrapper.querySelector('.sh-lightbox-prompt-history');
         const viewBtn = wrapper.querySelector('.sh-lightbox-prompt-view');
         const collapseBtn = wrapper.querySelector('.sh-lightbox-prompt-collapse');
         let suppressPositionUntil = 0;
@@ -2396,32 +2389,33 @@ function createLightboxPromptLabel(deps) {
                     }
                 });
             });
-            contentEl.querySelector('.sh-prompt-history-btn')?.addEventListener('click', () => {
-                if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId)
+        }
+        const openHistoryFromToolbar = () => {
+            if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId)
+                return;
+            // The history viewer is a Spindle modal layered above Lumiverse's
+            // native image lightbox. Insert/Replace should commit the selected
+            // image and then close that exact underlying viewer as one action.
+            // Capture this portal/image pair so a delayed close can never affect
+            // a different lightbox opened afterwards.
+            const closeUnderlyingLightbox = () => {
+                if (!portalRoot.isConnected || !img.isConnected)
                     return;
-                // The history viewer is a Spindle modal layered above Lumiverse's
-                // native image lightbox. Insert/Replace should commit the selected
-                // image and then close that exact underlying viewer as one action.
-                // Capture this portal/image pair so a delayed close can never affect
-                // a different lightbox opened afterwards.
-                const closeUnderlyingLightbox = () => {
+                dismissLabel();
+                setTimeout(() => {
                     if (!portalRoot.isConnected || !img.isConnected)
                         return;
-                    dismissLabel();
-                    setTimeout(() => {
-                        if (!portalRoot.isConnected || !img.isConnected)
-                            return;
-                        document.dispatchEvent(new KeyboardEvent('keydown', {
-                            key: 'Escape',
-                            code: 'Escape',
-                            bubbles: true,
-                            cancelable: true,
-                        }));
-                    }, 0);
-                };
-                deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox);
-            });
-        }
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape',
+                        code: 'Escape',
+                        bubbles: true,
+                        cancelable: true,
+                    }));
+                }, 0);
+            };
+            deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox);
+        };
+        historyBtn?.addEventListener('click', openHistoryFromToolbar);
         function setPromptExpanded(expanded) {
             if (!promptEl || !contentEl || !scrollEl || !resolvedPrompt)
                 return;
@@ -2470,13 +2464,13 @@ function createLightboxPromptLabel(deps) {
                 setTimeout(() => {
                     if (!copyBtn.isConnected)
                         return;
-                    copyBtn.textContent = 'Copy';
+                    copyBtn.textContent = 'Copy Prompt';
                     copyBtn.classList.remove('sh-copied');
                 }, 2000);
             }).catch(() => {
                 copyBtn.textContent = 'Failed';
                 setTimeout(() => { if (copyBtn.isConnected)
-                    copyBtn.textContent = 'Copy'; }, 1200);
+                    copyBtn.textContent = 'Copy Prompt'; }, 1200);
             });
         });
         // Shared components (native design parity). destroy() unmounts the
@@ -2542,6 +2536,13 @@ function createLightboxPromptLabel(deps) {
         scrollEl.hidden = true;
         if (statusEl)
             statusEl.hidden = true;
+        if (historyBtn) {
+            historyBtn.hidden = resolved.history.length === 0;
+            historyBtn.disabled = resolved.history.length === 0;
+            historyBtn.textContent = resolved.history.length > 0
+                ? `View History${resolved.history.length > 1 ? ` · ${resolved.history.length}` : ''}`
+                : 'View History';
+        }
         if (viewBtn) {
             viewBtn.hidden = false;
             viewBtn.disabled = false;
@@ -3287,7 +3288,7 @@ function createModals(deps) {
             historyPromptOpen = true;
             viewPromptBtn.disabled = true;
             const view = (0, history_1.promptViewFromRecord)(current());
-            const viewer = ctx.ui.showModal({ title: 'Generation Prompt', width: 640, persistent: true });
+            const viewer = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true });
             promptModal = viewer;
             isolateModalInput(viewer);
             const body = document.createElement('div');
@@ -3320,7 +3321,7 @@ function createModals(deps) {
             const copyBtn = document.createElement('button');
             copyBtn.type = 'button';
             copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-            copyBtn.textContent = 'Copy';
+            copyBtn.textContent = 'Copy Prompt';
             copyBtn.addEventListener('click', () => {
                 navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(view)).then(() => {
                     copyBtn.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
@@ -3328,13 +3329,13 @@ function createModals(deps) {
                     setTimeout(() => {
                         if (!copyBtn.isConnected)
                             return;
-                        copyBtn.textContent = 'Copy';
+                        copyBtn.textContent = 'Copy Prompt';
                         copyBtn.classList.remove('sh-copied');
                     }, 2000);
                 }).catch(() => {
                     copyBtn.textContent = 'Failed';
                     setTimeout(() => { if (copyBtn.isConnected)
-                        copyBtn.textContent = 'Copy'; }, 1200);
+                        copyBtn.textContent = 'Copy Prompt'; }, 1200);
                 });
             });
             promptActions.append(promptCloseBtn, copyBtn);
@@ -3498,7 +3499,7 @@ function createModals(deps) {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-        copyBtn.textContent = 'Copy';
+        copyBtn.textContent = 'Copy Prompt';
         copyBtn.hidden = true;
         copyBtn.addEventListener('click', () => {
             if (!activeView)
@@ -3509,13 +3510,13 @@ function createModals(deps) {
                 setTimeout(() => {
                     if (!copyBtn.isConnected)
                         return;
-                    copyBtn.textContent = 'Copy';
+                    copyBtn.textContent = 'Copy Prompt';
                     copyBtn.classList.remove('sh-copied');
                 }, 2000);
             }).catch(() => {
                 copyBtn.textContent = 'Failed';
                 setTimeout(() => { if (copyBtn.isConnected)
-                    copyBtn.textContent = 'Copy'; }, 1200);
+                    copyBtn.textContent = 'Copy Prompt'; }, 1200);
             });
         });
         const closeBtn = document.createElement('button');
@@ -3525,13 +3526,15 @@ function createModals(deps) {
         closeBtn.addEventListener('click', () => modal.dismiss());
         const historyBtn = document.createElement('button');
         historyBtn.type = 'button';
-        historyBtn.className = 'sh-prompt-history-btn';
+        historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
         historyBtn.textContent = 'View History';
+        historyBtn.title = 'View generation history for this message response';
         historyBtn.hidden = true;
-        actions.appendChild(copyBtn);
-        actions.appendChild(closeBtn);
+        // Follow Shutter's existing modal action pattern: content first, then a
+        // compact footer row. History is an action, not part of the scrollable
+        // prompt metadata body.
+        actions.append(closeBtn, historyBtn, copyBtn);
         container.appendChild(sourceSlot);
-        container.appendChild(historyBtn);
         container.appendChild(fieldsSlot);
         container.appendChild(actions);
         modal.root.appendChild(container);
@@ -4534,10 +4537,9 @@ exports.SHUTTER_CSS = `
     }
 
     /* One-source-at-a-time prompt metadata selector. In the compact native
-       lightbox pill this content is hidden with the rest of the body, so the
-       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile.
-       The expanded control is deliberately compact: it chooses a source, but
-       should not visually compete with the prompt itself. */
+       lightbox toolbar this content is hidden with the rest of the prompt
+       body. The expanded control is deliberately compact: it chooses a
+       source, but should not visually compete with the prompt itself. */
     .sh-prompt-source-tabs {
       display: inline-grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4578,24 +4580,6 @@ exports.SHUTTER_CSS = `
       line-height: 1.4;
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
-    .sh-prompt-history-btn {
-      width: 100%;
-      margin: 0 0 10px;
-      padding: 8px 10px;
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.1));
-      border-radius: var(--lcs-radius-sm, 8px);
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.05));
-      color: var(--lumiverse-text, #eee);
-      font: inherit;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
-      cursor: pointer;
-      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
-    }
-    .sh-prompt-history-btn:hover {
-      background: var(--lumiverse-fill-medium, rgba(255,255,255,0.09));
-      border-color: var(--lumiverse-border-strong, rgba(255,255,255,0.18));
-    }
     @media (max-width: 560px) {
       .sh-prompt-source-tabs { width: 100%; }
     }
@@ -4723,9 +4707,6 @@ exports.SHUTTER_CSS = `
     }
 
     .sh-lightbox-prompt [hidden] { display: none !important; }
-    .sh-lightbox-prompt-title {
-      flex: 0 0 auto;
-    }
     .sh-lightbox-prompt-status {
       display: inline-flex;
       align-items: center;
@@ -4752,6 +4733,7 @@ exports.SHUTTER_CSS = `
     .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
       margin-left: 0;
     }
+    .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
     .sh-lightbox-prompt-collapse {
       display: inline-flex;
@@ -4772,6 +4754,7 @@ exports.SHUTTER_CSS = `
       line-height: 1.4;
       cursor: pointer;
     }
+    .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
     .sh-lightbox-prompt-collapse:hover {
       color: var(--lumiverse-text, #eee);
@@ -4790,6 +4773,22 @@ exports.SHUTTER_CSS = `
       margin-bottom: 0;
       border-bottom: 0;
       gap: 10px;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
+      width: 100%;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-left: 0;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy {
+      padding-inline: 6px;
+      font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close-slot {
+      margin-left: 2px;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {
       display: none !important;

@@ -118,8 +118,11 @@ export function createLightboxPromptLabel(deps: {
   const PROMPT_EXPANDED_MAX = 480
   const PROMPT_MOBILE_EXPANDED_MAX = 260
   const PROMPT_PILL_HEIGHT = 44
-  const PROMPT_PILL_DESKTOP_WIDTH = 360
-  const PROMPT_PILL_MOBILE_WIDTH = 320
+  // The compact strip now exposes History, Prompt, and Copy directly. Let it
+  // use the available lightbox width (bounded by the viewport) rather than
+  // forcing those actions into the old Prompt/View/Copy-sized pill.
+  const PROMPT_PILL_DESKTOP_WIDTH = 520
+  const PROMPT_PILL_MOBILE_WIDTH = 520
   // Seed value for the expanded reserve only — the live value is measured
   // from the panel's actual rendered height (content-aware) at expand time.
   const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE // 176
@@ -495,10 +498,7 @@ export function createLightboxPromptLabel(deps: {
       const negativeBlock = view.negativePrompt
         ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
         : ''
-      const historyButton = sources.history.length > 0
-        ? `<button type="button" class="sh-prompt-history-btn">View History · ${sources.history.length}</button>`
-        : ''
-      return `${selector}${historyButton}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
+      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
     }
 
     // Inject a stable shell immediately — or, when metadata already settled,
@@ -520,12 +520,12 @@ export function createLightboxPromptLabel(deps: {
     const wrapper = ctx.dom.inject(document.body, `
       <div class="sh-lightbox-prompt sh-pill sh-loading" aria-live="polite">
         <div class="sh-lightbox-prompt-heading">
-          <span class="sh-lightbox-prompt-title">Prompt</span>
           <span class="sh-lightbox-prompt-status"><span class="sh-lightbox-prompt-spinner-slot" aria-hidden="true"></span><span>Reading prompt…</span></span>
           <span class="sh-lightbox-prompt-actions">
-            <button class="sh-lightbox-prompt-view" type="button" title="View prompt metadata" aria-label="View prompt metadata" hidden disabled>View</button>
-            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt metadata" aria-label="Collapse prompt metadata" hidden disabled>Collapse</button>
-            <button class="sh-lightbox-prompt-copy" type="button" title="Copy visible metadata" aria-label="Copy visible metadata" hidden disabled>Copy</button>
+            <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>View History</button>
+            <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View Prompt</button>
+            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse Prompt</button>
+            <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy Prompt</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
         </div>
@@ -597,6 +597,7 @@ export function createLightboxPromptLabel(deps: {
     const scrollEl = wrapper.querySelector('.sh-lightbox-prompt-scroll') as HTMLElement | null
     const contentEl = wrapper.querySelector('.sh-lightbox-prompt-content') as HTMLElement | null
     const statusEl = wrapper.querySelector('.sh-lightbox-prompt-status') as HTMLElement | null
+    const historyBtn = wrapper.querySelector('.sh-lightbox-prompt-history') as HTMLButtonElement | null
     const viewBtn = wrapper.querySelector('.sh-lightbox-prompt-view') as HTMLButtonElement | null
     const collapseBtn = wrapper.querySelector('.sh-lightbox-prompt-collapse') as HTMLButtonElement | null
     let suppressPositionUntil = 0
@@ -912,31 +913,34 @@ export function createLightboxPromptLabel(deps: {
           }
         })
       })
-      contentEl.querySelector<HTMLButtonElement>('.sh-prompt-history-btn')?.addEventListener('click', () => {
-        if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId) return
-
-        // The history viewer is a Spindle modal layered above Lumiverse's
-        // native image lightbox. Insert/Replace should commit the selected
-        // image and then close that exact underlying viewer as one action.
-        // Capture this portal/image pair so a delayed close can never affect
-        // a different lightbox opened afterwards.
-        const closeUnderlyingLightbox = () => {
-          if (!portalRoot.isConnected || !img.isConnected) return
-          dismissLabel()
-          setTimeout(() => {
-            if (!portalRoot.isConnected || !img.isConnected) return
-            document.dispatchEvent(new KeyboardEvent('keydown', {
-              key: 'Escape',
-              code: 'Escape',
-              bubbles: true,
-              cancelable: true,
-            }))
-          }, 0)
-        }
-
-        deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox)
-      })
     }
+
+    const openHistoryFromToolbar = () => {
+      if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId) return
+
+      // The history viewer is a Spindle modal layered above Lumiverse's
+      // native image lightbox. Insert/Replace should commit the selected
+      // image and then close that exact underlying viewer as one action.
+      // Capture this portal/image pair so a delayed close can never affect
+      // a different lightbox opened afterwards.
+      const closeUnderlyingLightbox = () => {
+        if (!portalRoot.isConnected || !img.isConnected) return
+        dismissLabel()
+        setTimeout(() => {
+          if (!portalRoot.isConnected || !img.isConnected) return
+          document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape',
+            code: 'Escape',
+            bubbles: true,
+            cancelable: true,
+          }))
+        }, 0)
+      }
+
+      deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox)
+    }
+
+    historyBtn?.addEventListener('click', openHistoryFromToolbar)
 
     function setPromptExpanded(expanded: boolean): void {
       if (!promptEl || !contentEl || !scrollEl || !resolvedPrompt) return
@@ -983,12 +987,12 @@ export function createLightboxPromptLabel(deps: {
         copyBtn.classList.add('sh-copied')
         setTimeout(() => {
           if (!copyBtn.isConnected) return
-          copyBtn.textContent = 'Copy'
+          copyBtn.textContent = 'Copy Prompt'
           copyBtn.classList.remove('sh-copied')
         }, 2000)
       }).catch(() => {
         copyBtn.textContent = 'Failed'
-        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
       })
     })
 
@@ -1054,6 +1058,13 @@ export function createLightboxPromptLabel(deps: {
     renderPromptSource(resolvedPrompt)
     scrollEl.hidden = true
     if (statusEl) statusEl.hidden = true
+    if (historyBtn) {
+      historyBtn.hidden = resolved.history.length === 0
+      historyBtn.disabled = resolved.history.length === 0
+      historyBtn.textContent = resolved.history.length > 0
+        ? `View History${resolved.history.length > 1 ? ` · ${resolved.history.length}` : ''}`
+        : 'View History'
+    }
     if (viewBtn) {
       viewBtn.hidden = false
       viewBtn.disabled = false

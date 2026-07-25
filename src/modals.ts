@@ -479,7 +479,7 @@ export function createModals(deps: {
       historyPromptOpen = true
       viewPromptBtn.disabled = true
       const view = promptViewFromRecord(current())
-      const viewer = ctx.ui.showModal({ title: 'Generation Prompt', width: 640, persistent: true })
+      const viewer = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true })
       promptModal = viewer
       isolateModalInput(viewer)
 
@@ -511,19 +511,19 @@ export function createModals(deps: {
       const copyBtn = document.createElement('button')
       copyBtn.type = 'button'
       copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-      copyBtn.textContent = 'Copy'
+      copyBtn.textContent = 'Copy Prompt'
       copyBtn.addEventListener('click', () => {
         navigator.clipboard.writeText(formatPromptMetadataForClipboard(view)).then(() => {
           copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
           copyBtn.classList.add('sh-copied')
           setTimeout(() => {
             if (!copyBtn.isConnected) return
-            copyBtn.textContent = 'Copy'
+            copyBtn.textContent = 'Copy Prompt'
             copyBtn.classList.remove('sh-copied')
           }, 2000)
         }).catch(() => {
           copyBtn.textContent = 'Failed'
-          setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
+          setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
         })
       })
       promptActions.append(promptCloseBtn, copyBtn)
@@ -690,7 +690,7 @@ export function createModals(deps: {
     const copyBtn = document.createElement('button')
     copyBtn.type = 'button'
     copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-    copyBtn.textContent = 'Copy'
+    copyBtn.textContent = 'Copy Prompt'
     copyBtn.hidden = true
     copyBtn.addEventListener('click', () => {
       if (!activeView) return
@@ -699,12 +699,12 @@ export function createModals(deps: {
         copyBtn.classList.add('sh-copied')
         setTimeout(() => {
           if (!copyBtn.isConnected) return
-          copyBtn.textContent = 'Copy'
+          copyBtn.textContent = 'Copy Prompt'
           copyBtn.classList.remove('sh-copied')
         }, 2000)
       }).catch(() => {
         copyBtn.textContent = 'Failed'
-        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy' }, 1200)
+        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
       })
     })
     const closeBtn = document.createElement('button')
@@ -714,14 +714,16 @@ export function createModals(deps: {
     closeBtn.addEventListener('click', () => modal.dismiss())
     const historyBtn = document.createElement('button')
     historyBtn.type = 'button'
-    historyBtn.className = 'sh-prompt-history-btn'
+    historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     historyBtn.textContent = 'View History'
+    historyBtn.title = 'View generation history for this message response'
     historyBtn.hidden = true
-    actions.appendChild(copyBtn)
-    actions.appendChild(closeBtn)
+    // Follow Shutter's existing modal action pattern: content first, then a
+    // compact footer row. History is an action, not part of the scrollable
+    // prompt metadata body.
+    actions.append(closeBtn, historyBtn, copyBtn)
 
     container.appendChild(sourceSlot)
-    container.appendChild(historyBtn)
     container.appendChild(fieldsSlot)
     container.appendChild(actions)
     modal.root.appendChild(container)

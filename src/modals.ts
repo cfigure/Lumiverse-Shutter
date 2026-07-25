@@ -43,7 +43,7 @@ export function createModals(deps: {
   type ModalHandle = {
     root: HTMLElement
     dismiss(): void
-    setTitle(title: string): void
+    setTitle?(title: string): void
     onDismiss(callback: () => void): (() => void) | void
   }
 
@@ -130,21 +130,67 @@ export function createModals(deps: {
     })
   }
 
-  function mountModalHeaderClose(modal: ModalHandle, onClick: () => void): void {
+  function modalHostHeader(modal: ModalHandle): HTMLElement | null {
     const hostBody = modal.root.parentElement
     const hostHeader = hostBody?.previousElementSibling
-    if (!(hostHeader instanceof HTMLElement)) return
+    return hostHeader instanceof HTMLElement ? hostHeader : null
+  }
 
-    const slot = document.createElement('span')
-    slot.className = 'sh-modal-header-close-slot'
-    hostHeader.appendChild(slot)
-    const handle = ctx.components.mountCloseButton(slot, {
-      onClick,
-      size: 'sm',
-      variant: 'subtle',
-      ariaLabel: 'Close',
+  function setModalTitle(modal: ModalHandle, title: string): void {
+    // Current Spindle exposes setTitle(), but older/mobile hosts may not. Keep
+    // the logical history -> prompt surface swap working in either case.
+    try {
+      if (typeof modal.setTitle === 'function') {
+        modal.setTitle(title)
+        return
+      }
+    } catch {
+      // Fall through to the host header title element.
+    }
+
+    const titleElement = modalHostHeader(modal)?.querySelector('h3')
+    if (titleElement) titleElement.textContent = title
+  }
+
+  function mountModalHeaderClose(modal: ModalHandle, onClick: () => void): void {
+    const hostHeader = modalHostHeader(modal)
+    if (!hostHeader) return
+
+    // Shared component mounts are restricted to extension-owned DOM. The modal
+    // header belongs to Lumiverse, so mounting ctx.components here throws and
+    // leaves an empty shell on mobile. A plain button is safe in host chrome.
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'sh-modal-header-close-native'
+    button.setAttribute('aria-label', 'Close')
+    button.title = 'Close'
+    Object.assign(button.style, {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flex: '0 0 auto',
+      background: 'none',
+      border: 'none',
+      color: 'var(--lumiverse-text-dim)',
+      cursor: 'pointer',
+      padding: '4px',
+      borderRadius: '4px',
+      lineHeight: '0',
     })
-    modal.onDismiss(() => handle.destroy())
+    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+
+    const handleClick = (event: MouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      onClick()
+    }
+    button.addEventListener('click', handleClick)
+    hostHeader.appendChild(button)
+
+    modal.onDismiss(() => {
+      button.removeEventListener('click', handleClick)
+      button.remove()
+    })
   }
 
   function constrainImagePromptModal(modal: ModalHandle): void {
@@ -198,7 +244,7 @@ export function createModals(deps: {
     },
   ): void {
     constrainImagePromptModal(modal)
-    modal.setTitle('Image Prompt')
+    setModalTitle(modal, 'Image Prompt')
 
     let activeView = options.initialView
     const body = document.createElement('div')
@@ -726,7 +772,7 @@ export function createModals(deps: {
 
     function renderHistorySurface(): void {
       surface = 'history'
-      modal.setTitle('Generation History')
+      setModalTitle(modal, 'Generation History')
       modal.root.classList.remove('sh-image-prompt-root')
       const hostBody = modal.root.parentElement
       if (hostBody instanceof HTMLElement) {

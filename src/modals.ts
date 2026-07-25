@@ -43,7 +43,7 @@ export function createModals(deps: {
   type ModalHandle = {
     root: HTMLElement
     dismiss(): void
-    setTitle?(title: string): void
+    setTitle(title: string): void
     onDismiss(callback: () => void): (() => void) | void
   }
 
@@ -130,78 +130,10 @@ export function createModals(deps: {
     })
   }
 
-  function modalHostHeader(modal: ModalHandle): HTMLElement | null {
+  function setImagePromptOverflow(modal: ModalHandle, enabled: boolean): void {
     const hostBody = modal.root.parentElement
-    const hostHeader = hostBody?.previousElementSibling
-    return hostHeader instanceof HTMLElement ? hostHeader : null
-  }
-
-  function setModalTitle(modal: ModalHandle, title: string): void {
-    // Current Spindle exposes setTitle(), but older/mobile hosts may not. Keep
-    // the logical history -> prompt surface swap working in either case.
-    try {
-      if (typeof modal.setTitle === 'function') {
-        modal.setTitle(title)
-        return
-      }
-    } catch {
-      // Fall through to the host header title element.
-    }
-
-    const titleElement = modalHostHeader(modal)?.querySelector('h3')
-    if (titleElement) titleElement.textContent = title
-  }
-
-  function mountModalHeaderClose(modal: ModalHandle, onClick: () => void): void {
-    const hostHeader = modalHostHeader(modal)
-    if (!hostHeader) return
-
-    // Shared component mounts are restricted to extension-owned DOM. The modal
-    // header belongs to Lumiverse, so mounting ctx.components here throws and
-    // leaves an empty shell on mobile. A plain button is safe in host chrome.
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'sh-modal-header-close-native'
-    button.setAttribute('aria-label', 'Close')
-    button.title = 'Close'
-    Object.assign(button.style, {
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      flex: '0 0 auto',
-      background: 'none',
-      border: 'none',
-      color: 'var(--lumiverse-text-dim)',
-      cursor: 'pointer',
-      padding: '4px',
-      borderRadius: '4px',
-      lineHeight: '0',
-    })
-    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
-
-    const handleClick = (event: MouseEvent) => {
-      event.preventDefault()
-      event.stopPropagation()
-      onClick()
-    }
-    button.addEventListener('click', handleClick)
-    hostHeader.appendChild(button)
-
-    modal.onDismiss(() => {
-      button.removeEventListener('click', handleClick)
-      button.remove()
-    })
-  }
-
-  function constrainImagePromptModal(modal: ModalHandle): void {
-    const hostBody = modal.root.parentElement
-    if (hostBody instanceof HTMLElement) {
-      hostBody.style.overflowY = 'hidden'
-      hostBody.style.minHeight = '0'
-      hostBody.style.display = 'flex'
-      hostBody.style.flexDirection = 'column'
-    }
-    modal.root.classList.add('sh-image-prompt-root')
+    if (hostBody instanceof HTMLElement) hostBody.style.overflowY = enabled ? 'hidden' : 'auto'
+    modal.root.classList.toggle('sh-image-prompt-root', enabled)
   }
 
   function makeReadonlyPromptField(label: string, text: string, kind: 'positive' | 'negative'): HTMLElement {
@@ -243,8 +175,8 @@ export function createModals(deps: {
       onViewHistory?: () => void
     },
   ): void {
-    constrainImagePromptModal(modal)
-    setModalTitle(modal, 'Image Prompt')
+    modal.setTitle('Image Prompt')
+    setImagePromptOverflow(modal, true)
 
     let activeView = options.initialView
     const body = document.createElement('div')
@@ -589,27 +521,17 @@ export function createModals(deps: {
     choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
       void regenerateFromSelected()
     }))
-    const insertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
-      if (insertBtn.getAttribute('aria-busy') === 'true') return
-      insertBtn.setAttribute('aria-busy', 'true')
-      for (const button of Array.from(choices.querySelectorAll('button'))) button.disabled = true
-      void comms.insertIntoMessage({
+    choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+      ctx.sendToBackend({
+        type: 'insert_into_message',
         imageId: current().imageId,
         messageId: target.messageId,
         chatId: target.chatId,
         target,
         replace: replaceChecked,
-      }).then(result => {
-        if (!modal.root.isConnected) return
-        if (result.success) {
-          modal.dismiss()
-          return
-        }
-        insertBtn.removeAttribute('aria-busy')
-        for (const button of Array.from(choices.querySelectorAll('button'))) button.disabled = false
       })
-    })
-    choices.appendChild(insertBtn)
+      modal.dismiss()
+    }))
     container.appendChild(choices)
     modal.root.appendChild(container)
 
@@ -639,20 +561,21 @@ export function createModals(deps: {
     if (idx < 0) idx = history.length - 1
     const current = () => history[idx]!
 
-    // This is the second and final physical modal in the widget flow. The
-    // history prompt reuses this handle by swapping its body and title, so the
-    // logical three-level flow never exceeds Spindle's two-modal limit.
+    // Match the Image Generated modal's shell, width, preview sizing, and
+    // footer placement. The same modal body is reused for View Prompt so the
+    // logical Widget Prompt -> History -> Prompt flow stays within Lumiverse's
+    // two-modal extension limit.
     const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true }) as ModalHandle
     activeHistoryViewerModal = modal
     let surface: 'history' | 'prompt' = 'history'
     let committing = false
+    let promptRenderToken = 0
 
     const closeCurrentSurface = () => {
       if (surface === 'prompt') renderHistorySurface()
       else modal.dismiss()
     }
     isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface })
-    mountModalHeaderClose(modal, closeCurrentSurface)
 
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
@@ -697,14 +620,31 @@ export function createModals(deps: {
     viewPromptBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     viewPromptBtn.textContent = 'View Prompt'
     viewPromptBtn.title = 'View and copy the prompt saved for this generation'
-    viewPromptBtn.addEventListener('click', () => {
+
+    const openSelectedPrompt = (): void => {
       if (committing) return
+      const entry = current()
+      const shutterView = promptViewFromRecord(entry)
+      const token = ++promptRenderToken
       surface = 'prompt'
       renderImagePromptSurface(modal, {
-        initialView: promptViewFromRecord(current()),
+        initialView: shutterView,
         onClose: renderHistorySurface,
       })
-    })
+
+      const imageUrl = imageUrlForHistoryRecord(entry)
+      void resolveEmbeddedPromptForImage({ imageId: entry.imageId, path: imageUrl }, imageUrl).then(embedded => {
+        if (!embedded || surface !== 'prompt' || token !== promptRenderToken || !modal.root.isConnected) return
+        const embeddedView = promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt)
+        renderImagePromptSurface(modal, {
+          initialView: shutterView,
+          shutterView,
+          embeddedView,
+          onClose: renderHistorySurface,
+        })
+      })
+    }
+    viewPromptBtn.addEventListener('click', openSelectedPrompt)
 
     const replaceBtn = document.createElement('button')
     replaceBtn.type = 'button'
@@ -718,12 +658,12 @@ export function createModals(deps: {
     insertBtn.textContent = 'Insert'
     insertBtn.title = 'Insert this image into its original message response'
 
-    const setCommitDisabled = (disabled: boolean) => {
+    const setCommitDisabled = (disabled: boolean): void => {
       committing = disabled
       for (const button of [closeBtn, viewPromptBtn, replaceBtn, insertBtn, prev, next]) button.disabled = disabled
     }
 
-    const commitSelected = async (replace: boolean) => {
+    const commitSelected = async (replace: boolean): Promise<void> => {
       if (committing) return
       setCommitDisabled(true)
       const entry = current()
@@ -738,7 +678,7 @@ export function createModals(deps: {
         replaceImageId: replace ? initialImageId : undefined,
       })
       if (!modal.root.isConnected) return
-      if (!result.success) {
+      if (!result.success || !result.changed) {
         setCommitDisabled(false)
         render()
         return
@@ -771,16 +711,10 @@ export function createModals(deps: {
     }
 
     function renderHistorySurface(): void {
+      promptRenderToken++
       surface = 'history'
-      setModalTitle(modal, 'Generation History')
-      modal.root.classList.remove('sh-image-prompt-root')
-      const hostBody = modal.root.parentElement
-      if (hostBody instanceof HTMLElement) {
-        hostBody.style.overflowY = 'auto'
-        hostBody.style.display = ''
-        hostBody.style.flexDirection = ''
-        hostBody.style.minHeight = ''
-      }
+      modal.setTitle('Generation History')
+      setImagePromptOverflow(modal, false)
       modal.root.replaceChildren(container)
       render()
     }
@@ -823,6 +757,7 @@ export function createModals(deps: {
 
     renderHistorySurface()
     modal.onDismiss(() => {
+      promptRenderToken++
       if (activeHistoryViewerModal === modal) activeHistoryViewerModal = null
       dismissLightbox()
       window.removeEventListener('keydown', arrowHandler, { capture: true })
@@ -856,35 +791,39 @@ export function createModals(deps: {
     if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 
-    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true }) as ModalHandle
+    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 }) as ModalHandle
     activePromptViewerModal = modal
+    isolateModalInput(modal)
+    setImagePromptOverflow(modal, true)
     let dismissed = false
-    const closePrompt = () => modal.dismiss()
-    isolateModalInput(modal, { onEscape: closePrompt })
-    mountModalHeaderClose(modal, closePrompt)
-    constrainImagePromptModal(modal)
 
-    const loadingBody = document.createElement('div')
-    loadingBody.className = 'sh-prompt-body sh-image-prompt-body sh-image-prompt-loading-body'
+    const container = document.createElement('div')
+    container.className = 'sh-prompt-body sh-image-prompt-loading'
+    const subtitle = document.createElement('p')
+    subtitle.className = 'sh-prompt-subtitle'
+    subtitle.textContent = 'Reading saved and embedded prompt metadata.'
+    container.appendChild(subtitle)
+
     const status = document.createElement('div')
     status.className = 'sh-prompt-viewer-status'
     const spinnerSlot = document.createElement('span')
     const statusText = document.createElement('span')
     statusText.textContent = 'Reading prompt…'
     status.append(spinnerSlot, statusText)
-    const loadingActions = document.createElement('div')
-    loadingActions.className = 'sh-prompt-actions sh-image-prompt-actions'
-    const loadingCloseBtn = document.createElement('button')
-    loadingCloseBtn.type = 'button'
-    loadingCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-    loadingCloseBtn.textContent = 'Close'
-    loadingCloseBtn.addEventListener('click', closePrompt)
-    loadingActions.appendChild(loadingCloseBtn)
-    loadingBody.append(status, loadingActions)
-    modal.root.replaceChildren(loadingBody)
-
+    container.appendChild(status)
     let spinnerHandle: { destroy(): void } | null = ctx.components.mountSpinner(spinnerSlot, { size: 14, fast: true })
     const destroySpinner = () => { spinnerHandle?.destroy(); spinnerHandle = null }
+
+    const loadingActions = document.createElement('div')
+    loadingActions.className = 'sh-prompt-actions'
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', () => modal.dismiss())
+    loadingActions.appendChild(closeBtn)
+    container.appendChild(loadingActions)
+    modal.root.appendChild(container)
 
     modal.onDismiss(() => {
       dismissed = true
@@ -912,20 +851,21 @@ export function createModals(deps: {
 
       const shutterView = record ? promptViewFromRecord(record) : null
       const embeddedView = embedded ? promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt) : null
-      const initialView = shutterView ?? embeddedView
-      if (!initialView) {
-        statusText.textContent = 'No saved or embedded prompt metadata is available for this image.'
+      if (!shutterView && !embeddedView) {
+        subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.'
+        status.remove()
         return
       }
 
+      const initialView = shutterView ?? embeddedView!
       renderImagePromptSurface(modal, {
         initialView,
         shutterView,
         embeddedView,
-        onClose: closePrompt,
+        onClose: () => modal.dismiss(),
         historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
         onViewHistory: history.length > 0
-          ? () => openHistoryViewer(history, tag.imageId, undefined, closePrompt)
+          ? () => openHistoryViewer(history, tag.imageId, undefined, () => modal.dismiss())
           : undefined,
       })
     })()

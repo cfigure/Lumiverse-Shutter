@@ -184,7 +184,8 @@ export const SHUTTER_CSS = `
       padding: 8px 0;
     }
 
-    /* Compact source controls shared by the modal and expanded lightbox. */
+    /* Compact source controls shared by the Image Prompt modal and the
+       expanded lightbox prompt area. */
     .sh-prompt-source-tabs {
       display: inline-flex;
       align-items: center;
@@ -200,19 +201,22 @@ export const SHUTTER_CSS = `
       white-space: nowrap;
     }
     .sh-prompt-source-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
       min-width: 0;
-      min-height: 28px;
-      padding: 4px 10px;
+      padding: 2px 8px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
-      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.4;
       cursor: pointer;
+      white-space: nowrap;
       transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
     .sh-prompt-source-btn:hover {
@@ -232,62 +236,23 @@ export const SHUTTER_CSS = `
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
 
-    /* Image Prompt uses the host modal shell, but constrains the extension
-       body so only the prompt boxes scroll. Header and footer stay visible. */
-    .sh-image-prompt-root {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      width: 100%;
-      min-height: 0;
+    /* Image Prompt keeps Shutter's established prompt-modal structure. The
+       host body is made non-scrolling in code; only these read-only prompt
+       boxes scroll internally, leaving the standard footer visible. */
+    .sh-image-prompt-root { width: 100%; min-height: 0; }
+    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 12px; }
+    .sh-image-prompt-meta { margin: 0; overflow-wrap: anywhere; }
+    .sh-image-prompt-fields { min-height: 0; overflow: hidden; }
+    .sh-image-prompt-readonly { box-sizing: border-box; }
+    .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
+    .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
+    .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }
+    .sh-image-prompt-actions { flex: 0 0 auto; }
+    @media (max-height: 520px) {
+      .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 92px; }
+      .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 52px; }
+      .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 156px; }
     }
-    .sh-image-prompt-body {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      min-height: 0;
-      height: min(420px, calc(var(--app-scaled-viewport-height, 100dvh) - 132px));
-      max-height: 100%;
-      gap: 10px;
-      overflow: hidden;
-    }
-    .sh-image-prompt-meta {
-      flex: 0 0 auto;
-      margin: 0;
-      overflow-wrap: anywhere;
-    }
-    .sh-image-prompt-fields {
-      display: grid;
-      flex: 1 1 auto;
-      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
-      min-height: 0;
-      gap: 10px;
-      overflow: hidden;
-    }
-    .sh-image-prompt-fields.sh-no-negative {
-      display: flex;
-    }
-    .sh-image-prompt-field {
-      min-height: 0;
-      overflow: hidden;
-    }
-    .sh-image-prompt-field-positive { flex: 1 1 auto; }
-    .sh-image-prompt-readonly {
-      flex: 1 1 auto;
-      height: auto;
-      min-height: 0;
-      max-height: none;
-    }
-    .sh-image-prompt-actions {
-      flex: 0 0 auto;
-      margin-top: auto;
-    }
-    .sh-image-prompt-loading-body .sh-prompt-viewer-status {
-      flex: 1 1 auto;
-      align-items: center;
-      justify-content: center;
-    }
-    .sh-modal-header-close-slot { display: inline-flex; align-items: center; }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the
        portal) ── The wrapper is fixed-positioned via JS and deliberately

@@ -118,8 +118,8 @@ export function createLightboxPromptLabel(deps: {
   const PROMPT_EXPANDED_MAX = 480
   const PROMPT_MOBILE_EXPANDED_MAX = 260
   const PROMPT_PILL_HEIGHT = 44
-  // The compact strip is content-width; expanded prompt sizing still uses
-  // the image-aware desktop/mobile bounds above.
+  // The compact strip is content-width; expanded prompt sizing remains
+  // image-aware using the desktop/mobile bounds above.
   // Seed value for the expanded reserve only — the live value is measured
   // from the panel's actual rendered height (content-aware) at expand time.
   const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE // 176
@@ -521,7 +521,7 @@ export function createLightboxPromptLabel(deps: {
           <span class="sh-lightbox-prompt-actions">
             <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>View History</button>
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View Prompt</button>
-            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse Prompt</button>
+            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy Prompt</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
@@ -729,8 +729,8 @@ export function createLightboxPromptLabel(deps: {
               ))
 
       // Collapsed mode is a true content-width toolbar. Write fit-content
-      // before measuring so inherited or previously-expanded widths cannot
-      // stretch it across the lightbox.
+      // before measuring so a prior expanded width or inherited minimum
+      // cannot stretch it across the lightbox.
       if (!isExpanded) {
         setStyleIfChanged(ws, 'width', 'fit-content')
         setStyleIfChanged(ws, 'min-width', '0px')

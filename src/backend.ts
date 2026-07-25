@@ -475,23 +475,19 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
       }
 
       case 'insert_into_message': {
-        const reply = (success: boolean, changed: boolean, error?: string) => {
+        const reply = (success: boolean, changed: boolean): void => {
           if (!payload.requestId) return
           spindle.sendToFrontend({
             type: 'insert_result',
             requestId: payload.requestId,
             success,
             changed,
-            error,
           }, userId)
-        }
-        const fail = (message: string, level: 'warning' | 'error' = 'error') => {
-          spindle.toast[level](message, { userId })
-          reply(false, false, message)
         }
 
         if (!spindle.permissions.has('chat_mutation')) {
-          fail('Grant the "Chat Mutation" permission to insert images into messages.', 'warning')
+          spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId })
+          reply(false, false)
           break
         }
 
@@ -500,13 +496,15 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           const requestedId = payload.target?.messageId ?? payload.messageId
           const { target: message, error } = resolveTarget(messages, requestedId)
           if (!message) {
-            fail(error || 'Message not found.')
+            spindle.toast.error(error || 'Message not found.', { userId })
+            reply(false, false)
             break
           }
 
           const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id
           if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
-            fail('The message response used for this generation no longer exists.')
+            spindle.toast.error('The message response used for this generation no longer exists.', { userId })
+            reply(false, false)
             break
           }
 
@@ -519,7 +517,8 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
               ? stripShutterImageById(baseContent, payload.replaceImageId)
               : stripLastShutterImage(baseContent)
             if (payload.replaceImageId && !stripped.found) {
-              fail('The image selected for replacement is no longer in that message response.')
+              spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId })
+              reply(false, false)
               break
             }
             baseContent = stripped.content
@@ -554,9 +553,8 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           }
           reply(true, true)
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          spindle.log.error(`[insert_into_message] ${message}`)
-          fail('Could not update the message response.')
+          spindle.log.error(`[insert_into_message] ${err instanceof Error ? err.message : String(err)}`)
+          reply(false, false)
         }
         break
       }

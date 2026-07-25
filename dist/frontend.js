@@ -377,7 +377,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
                 break;
             }
             case 'insert_into_message': {
-                const reply = (success, changed, error) => {
+                const reply = (success, changed) => {
                     if (!payload.requestId)
                         return;
                     spindle.sendToFrontend({
@@ -385,15 +385,11 @@ spindle.onFrontendMessage(async (raw, userId) => {
                         requestId: payload.requestId,
                         success,
                         changed,
-                        error,
                     }, userId);
                 };
-                const fail = (message, level = 'error') => {
-                    spindle.toast[level](message, { userId });
-                    reply(false, false, message);
-                };
                 if (!spindle.permissions.has('chat_mutation')) {
-                    fail('Grant the "Chat Mutation" permission to insert images into messages.', 'warning');
+                    spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId });
+                    reply(false, false);
                     break;
                 }
                 try {
@@ -401,12 +397,14 @@ spindle.onFrontendMessage(async (raw, userId) => {
                     const requestedId = payload.target?.messageId ?? payload.messageId;
                     const { target: message, error } = resolveTarget(messages, requestedId);
                     if (!message) {
-                        fail(error || 'Message not found.');
+                        spindle.toast.error(error || 'Message not found.', { userId });
+                        reply(false, false);
                         break;
                     }
                     const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id;
                     if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
-                        fail('The message response used for this generation no longer exists.');
+                        spindle.toast.error('The message response used for this generation no longer exists.', { userId });
+                        reply(false, false);
                         break;
                     }
                     const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
@@ -417,7 +415,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
                             ? stripShutterImageById(baseContent, payload.replaceImageId)
                             : stripLastShutterImage(baseContent);
                         if (payload.replaceImageId && !stripped.found) {
-                            fail('The image selected for replacement is no longer in that message response.');
+                            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
+                            reply(false, false);
                             break;
                         }
                         baseContent = stripped.content;
@@ -451,9 +450,8 @@ spindle.onFrontendMessage(async (raw, userId) => {
                     reply(true, true);
                 }
                 catch (err) {
-                    const message = err instanceof Error ? err.message : String(err);
-                    spindle.log.error(`[insert_into_message] ${message}`);
-                    fail('Could not update the message response.');
+                    spindle.log.error(`[insert_into_message] ${err instanceof Error ? err.message : String(err)}`);
+                    reply(false, false);
                 }
                 break;
             }
@@ -1638,8 +1636,8 @@ function createLightboxPromptLabel(deps) {
     const PROMPT_EXPANDED_MAX = 480;
     const PROMPT_MOBILE_EXPANDED_MAX = 260;
     const PROMPT_PILL_HEIGHT = 44;
-    // The compact strip is content-width; expanded prompt sizing still uses
-    // the image-aware desktop/mobile bounds above.
+    // The compact strip is content-width; expanded prompt sizing remains
+    // image-aware using the desktop/mobile bounds above.
     // Seed value for the expanded reserve only — the live value is measured
     // from the panel's actual rendered height (content-aware) at expand time.
     const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE; // 176
@@ -2041,7 +2039,7 @@ function createLightboxPromptLabel(deps) {
           <span class="sh-lightbox-prompt-actions">
             <button class="sh-lightbox-prompt-history" type="button" title="View generation history" aria-label="View generation history" hidden disabled>View History</button>
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>View Prompt</button>
-            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse Prompt</button>
+            <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy Prompt</button>
             <span class="sh-lightbox-prompt-close-slot"></span>
           </span>
@@ -2245,8 +2243,8 @@ function createLightboxPromptLabel(deps) {
                     ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
                     : Math.min(Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH), PROMPT_DESKTOP_MAX_WIDTH, viewportMax));
             // Collapsed mode is a true content-width toolbar. Write fit-content
-            // before measuring so inherited or previously-expanded widths cannot
-            // stretch it across the lightbox.
+            // before measuring so a prior expanded width or inherited minimum
+            // cannot stretch it across the lightbox.
             if (!isExpanded) {
                 setStyleIfChanged(ws, 'width', 'fit-content');
                 setStyleIfChanged(ws, 'min-width', '0px');
@@ -3000,74 +2998,11 @@ function createModals(deps) {
                 modalInputStack.splice(stackIndex, 1);
         });
     }
-    function modalHostHeader(modal) {
+    function setImagePromptOverflow(modal, enabled) {
         const hostBody = modal.root.parentElement;
-        const hostHeader = hostBody?.previousElementSibling;
-        return hostHeader instanceof HTMLElement ? hostHeader : null;
-    }
-    function setModalTitle(modal, title) {
-        // Current Spindle exposes setTitle(), but older/mobile hosts may not. Keep
-        // the logical history -> prompt surface swap working in either case.
-        try {
-            if (typeof modal.setTitle === 'function') {
-                modal.setTitle(title);
-                return;
-            }
-        }
-        catch {
-            // Fall through to the host header title element.
-        }
-        const titleElement = modalHostHeader(modal)?.querySelector('h3');
-        if (titleElement)
-            titleElement.textContent = title;
-    }
-    function mountModalHeaderClose(modal, onClick) {
-        const hostHeader = modalHostHeader(modal);
-        if (!hostHeader)
-            return;
-        // Shared component mounts are restricted to extension-owned DOM. The modal
-        // header belongs to Lumiverse, so mounting ctx.components here throws and
-        // leaves an empty shell on mobile. A plain button is safe in host chrome.
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'sh-modal-header-close-native';
-        button.setAttribute('aria-label', 'Close');
-        button.title = 'Close';
-        Object.assign(button.style, {
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flex: '0 0 auto',
-            background: 'none',
-            border: 'none',
-            color: 'var(--lumiverse-text-dim)',
-            cursor: 'pointer',
-            padding: '4px',
-            borderRadius: '4px',
-            lineHeight: '0',
-        });
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-        const handleClick = (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onClick();
-        };
-        button.addEventListener('click', handleClick);
-        hostHeader.appendChild(button);
-        modal.onDismiss(() => {
-            button.removeEventListener('click', handleClick);
-            button.remove();
-        });
-    }
-    function constrainImagePromptModal(modal) {
-        const hostBody = modal.root.parentElement;
-        if (hostBody instanceof HTMLElement) {
-            hostBody.style.overflowY = 'hidden';
-            hostBody.style.minHeight = '0';
-            hostBody.style.display = 'flex';
-            hostBody.style.flexDirection = 'column';
-        }
-        modal.root.classList.add('sh-image-prompt-root');
+        if (hostBody instanceof HTMLElement)
+            hostBody.style.overflowY = enabled ? 'hidden' : 'auto';
+        modal.root.classList.toggle('sh-image-prompt-root', enabled);
     }
     function makeReadonlyPromptField(label, text, kind) {
         const field = document.createElement('div');
@@ -3098,8 +3033,8 @@ function createModals(deps) {
         });
     }
     function renderImagePromptSurface(modal, options) {
-        constrainImagePromptModal(modal);
-        setModalTitle(modal, 'Image Prompt');
+        modal.setTitle('Image Prompt');
+        setImagePromptOverflow(modal, true);
         let activeView = options.initialView;
         const body = document.createElement('div');
         body.className = 'sh-prompt-body sh-image-prompt-body';
@@ -3432,31 +3367,17 @@ function createModals(deps) {
         choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
             void regenerateFromSelected();
         }));
-        const insertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
-            if (insertBtn.getAttribute('aria-busy') === 'true')
-                return;
-            insertBtn.setAttribute('aria-busy', 'true');
-            for (const button of Array.from(choices.querySelectorAll('button')))
-                button.disabled = true;
-            void comms.insertIntoMessage({
+        choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+            ctx.sendToBackend({
+                type: 'insert_into_message',
                 imageId: current().imageId,
                 messageId: target.messageId,
                 chatId: target.chatId,
                 target,
                 replace: replaceChecked,
-            }).then(result => {
-                if (!modal.root.isConnected)
-                    return;
-                if (result.success) {
-                    modal.dismiss();
-                    return;
-                }
-                insertBtn.removeAttribute('aria-busy');
-                for (const button of Array.from(choices.querySelectorAll('button')))
-                    button.disabled = false;
             });
-        });
-        choices.appendChild(insertBtn);
+            modal.dismiss();
+        }));
         container.appendChild(choices);
         modal.root.appendChild(container);
         renderHistory();
@@ -3478,13 +3399,15 @@ function createModals(deps) {
         if (idx < 0)
             idx = history.length - 1;
         const current = () => history[idx];
-        // This is the second and final physical modal in the widget flow. The
-        // history prompt reuses this handle by swapping its body and title, so the
-        // logical three-level flow never exceeds Spindle's two-modal limit.
+        // Match the Image Generated modal's shell, width, preview sizing, and
+        // footer placement. The same modal body is reused for View Prompt so the
+        // logical Widget Prompt -> History -> Prompt flow stays within Lumiverse's
+        // two-modal extension limit.
         const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true });
         activeHistoryViewerModal = modal;
         let surface = 'history';
         let committing = false;
+        let promptRenderToken = 0;
         const closeCurrentSurface = () => {
             if (surface === 'prompt')
                 renderHistorySurface();
@@ -3492,7 +3415,6 @@ function createModals(deps) {
                 modal.dismiss();
         };
         isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface });
-        mountModalHeaderClose(modal, closeCurrentSurface);
         const container = document.createElement('div');
         container.className = 'sh-modal-body';
         const previewWrap = document.createElement('div');
@@ -3531,15 +3453,31 @@ function createModals(deps) {
         viewPromptBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
         viewPromptBtn.textContent = 'View Prompt';
         viewPromptBtn.title = 'View and copy the prompt saved for this generation';
-        viewPromptBtn.addEventListener('click', () => {
+        const openSelectedPrompt = () => {
             if (committing)
                 return;
+            const entry = current();
+            const shutterView = (0, history_1.promptViewFromRecord)(entry);
+            const token = ++promptRenderToken;
             surface = 'prompt';
             renderImagePromptSurface(modal, {
-                initialView: (0, history_1.promptViewFromRecord)(current()),
+                initialView: shutterView,
                 onClose: renderHistorySurface,
             });
-        });
+            const imageUrl = (0, history_1.imageUrlForHistoryRecord)(entry);
+            void (0, metadata_1.resolveEmbeddedPromptForImage)({ imageId: entry.imageId, path: imageUrl }, imageUrl).then(embedded => {
+                if (!embedded || surface !== 'prompt' || token !== promptRenderToken || !modal.root.isConnected)
+                    return;
+                const embeddedView = (0, history_1.promptViewFromEmbedded)(embedded.prompt, embedded.negativePrompt);
+                renderImagePromptSurface(modal, {
+                    initialView: shutterView,
+                    shutterView,
+                    embeddedView,
+                    onClose: renderHistorySurface,
+                });
+            });
+        };
+        viewPromptBtn.addEventListener('click', openSelectedPrompt);
         const replaceBtn = document.createElement('button');
         replaceBtn.type = 'button';
         replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
@@ -3572,7 +3510,7 @@ function createModals(deps) {
             });
             if (!modal.root.isConnected)
                 return;
-            if (!result.success) {
+            if (!result.success || !result.changed) {
                 setCommitDisabled(false);
                 render();
                 return;
@@ -3604,16 +3542,10 @@ function createModals(deps) {
             }
         }
         function renderHistorySurface() {
+            promptRenderToken++;
             surface = 'history';
-            setModalTitle(modal, 'Generation History');
-            modal.root.classList.remove('sh-image-prompt-root');
-            const hostBody = modal.root.parentElement;
-            if (hostBody instanceof HTMLElement) {
-                hostBody.style.overflowY = 'auto';
-                hostBody.style.display = '';
-                hostBody.style.flexDirection = '';
-                hostBody.style.minHeight = '';
-            }
+            modal.setTitle('Generation History');
+            setImagePromptOverflow(modal, false);
             modal.root.replaceChildren(container);
             render();
         }
@@ -3662,6 +3594,7 @@ function createModals(deps) {
         }, { passive: true });
         renderHistorySurface();
         modal.onDismiss(() => {
+            promptRenderToken++;
             if (activeHistoryViewerModal === modal)
                 activeHistoryViewerModal = null;
             dismissLightbox();
@@ -3692,33 +3625,36 @@ function createModals(deps) {
         if (!chatId || promptViewerOpen)
             return;
         promptViewerOpen = true;
-        const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true });
+        const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 });
         activePromptViewerModal = modal;
+        isolateModalInput(modal);
+        setImagePromptOverflow(modal, true);
         let dismissed = false;
-        const closePrompt = () => modal.dismiss();
-        isolateModalInput(modal, { onEscape: closePrompt });
-        mountModalHeaderClose(modal, closePrompt);
-        constrainImagePromptModal(modal);
-        const loadingBody = document.createElement('div');
-        loadingBody.className = 'sh-prompt-body sh-image-prompt-body sh-image-prompt-loading-body';
+        const container = document.createElement('div');
+        container.className = 'sh-prompt-body sh-image-prompt-loading';
+        const subtitle = document.createElement('p');
+        subtitle.className = 'sh-prompt-subtitle';
+        subtitle.textContent = 'Reading saved and embedded prompt metadata.';
+        container.appendChild(subtitle);
         const status = document.createElement('div');
         status.className = 'sh-prompt-viewer-status';
         const spinnerSlot = document.createElement('span');
         const statusText = document.createElement('span');
         statusText.textContent = 'Reading prompt…';
         status.append(spinnerSlot, statusText);
-        const loadingActions = document.createElement('div');
-        loadingActions.className = 'sh-prompt-actions sh-image-prompt-actions';
-        const loadingCloseBtn = document.createElement('button');
-        loadingCloseBtn.type = 'button';
-        loadingCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
-        loadingCloseBtn.textContent = 'Close';
-        loadingCloseBtn.addEventListener('click', closePrompt);
-        loadingActions.appendChild(loadingCloseBtn);
-        loadingBody.append(status, loadingActions);
-        modal.root.replaceChildren(loadingBody);
+        container.appendChild(status);
         let spinnerHandle = ctx.components.mountSpinner(spinnerSlot, { size: 14, fast: true });
         const destroySpinner = () => { spinnerHandle?.destroy(); spinnerHandle = null; };
+        const loadingActions = document.createElement('div');
+        loadingActions.className = 'sh-prompt-actions';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', () => modal.dismiss());
+        loadingActions.appendChild(closeBtn);
+        container.appendChild(loadingActions);
+        modal.root.appendChild(container);
         modal.onDismiss(() => {
             dismissed = true;
             destroySpinner();
@@ -3745,19 +3681,20 @@ function createModals(deps) {
             destroySpinner();
             const shutterView = record ? (0, history_1.promptViewFromRecord)(record) : null;
             const embeddedView = embedded ? (0, history_1.promptViewFromEmbedded)(embedded.prompt, embedded.negativePrompt) : null;
-            const initialView = shutterView ?? embeddedView;
-            if (!initialView) {
-                statusText.textContent = 'No saved or embedded prompt metadata is available for this image.';
+            if (!shutterView && !embeddedView) {
+                subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.';
+                status.remove();
                 return;
             }
+            const initialView = shutterView ?? embeddedView;
             renderImagePromptSurface(modal, {
                 initialView,
                 shutterView,
                 embeddedView,
-                onClose: closePrompt,
+                onClose: () => modal.dismiss(),
                 historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
                 onViewHistory: history.length > 0
-                    ? () => openHistoryViewer(history, tag.imageId, undefined, closePrompt)
+                    ? () => openHistoryViewer(history, tag.imageId, undefined, () => modal.dismiss())
                     : undefined,
             });
         })();
@@ -3896,93 +3833,6 @@ function createModals(deps) {
             dismissLightbox();
         },
     };
-}
-};
-
-__modules["./settings"] = function(module, exports, require) {
-"use strict";
-// Shared settings model — the single source of truth for Shutter's settings
-// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
-// frontend.ts); bun bundles it into each dist file, so the host still sees
-// exactly two self-contained bundles. Everything here must stay
-// environment-neutral: no `spindle`, no DOM, no browser globals.
-//
-// Adding a setting touches this file only (type + default + validation),
-// plus wherever the setting is actually used.
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
-exports.clampShutterImageWidth = clampShutterImageWidth;
-exports.validateSettings = validateSettings;
-// ── Icon IDs ──
-// Defined here (not icons.ts) so backend validation can consume the runtime
-// list without pulling the SVG payloads into the backend bundle. icons.ts
-// derives its ShutterIconSet record from this same type.
-exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
-// The runtime source of defaults. There is deliberately NO defaults/*.json
-// seed file: `storage_seed_files` copies into extension storage
-// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
-// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
-// seed was never read. loadSettings() spreads these defaults over whatever
-// userStorage returns (fallback {}), which fully covers fresh installs.
-exports.DEFAULT_SETTINGS = {
-    showFloatWidget: false,
-    toastOnInsert: true,
-    generationHistory: false,
-    gestureNavigation: false,
-    afterGenerate: 'ask_to_insert',
-    widgetSize: 'small',
-    widgetStyle: 'color',
-    iconTheme: 'aperture',
-    autoGenerate: 'off',
-    autoGenerateInterval: 3,
-    autoGenerateRandomMin: 3,
-    autoGenerateRandomMax: 7,
-    autoGenerateAfter: 'auto_insert',
-    autoPreviewPrompt: false,
-    defaultAction: 'append',
-    deleteConfirmation: 'bulk_only',
-    removeImageTagsFromContext: true,
-    showPromptInLightbox: false,
-    shutterImageLayout: 'off',
-    shutterImageWidth: 50,
-    shutterImageAlign: 'center',
-};
-// Shared by backend validation, the settings panel's percent input, and the
-// frontend's inline image-layout stylesheet.
-function clampShutterImageWidth(value) {
-    if (!Number.isFinite(value))
-        return 100;
-    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
-}
-// ── Validation ──
-// Pure; the backend is the authority (it validates on every load and save),
-// the frontend only mirrors validated settings echoed back over the channel.
-function validateSettings(s) {
-    const out = { ...s };
-    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
-    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
-    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
-    // saveSettings re-persists the whole merged object on every save, so the
-    // stale key never self-cleans from users' settings.json; strip it here on
-    // the next write. Safe to delete this line once 1.0.5-era installs have
-    // aged out.
-    delete out.forceGeneration;
-    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
-        out.iconTheme = 'aperture';
-    }
-    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
-    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
-    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
-    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
-        out.shutterImageLayout = 'off';
-    }
-    if (out.shutterImageAlign !== 'left' &&
-        out.shutterImageAlign !== 'center' &&
-        out.shutterImageAlign !== 'right') {
-        out.shutterImageAlign = 'center';
-    }
-    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
-    return out;
 }
 };
 
@@ -4477,6 +4327,93 @@ function createSettingsPanel(deps) {
 }
 };
 
+__modules["./settings"] = function(module, exports, require) {
+"use strict";
+// Shared settings model — the single source of truth for Shutter's settings
+// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
+// frontend.ts); bun bundles it into each dist file, so the host still sees
+// exactly two self-contained bundles. Everything here must stay
+// environment-neutral: no `spindle`, no DOM, no browser globals.
+//
+// Adding a setting touches this file only (type + default + validation),
+// plus wherever the setting is actually used.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
+exports.clampShutterImageWidth = clampShutterImageWidth;
+exports.validateSettings = validateSettings;
+// ── Icon IDs ──
+// Defined here (not icons.ts) so backend validation can consume the runtime
+// list without pulling the SVG payloads into the backend bundle. icons.ts
+// derives its ShutterIconSet record from this same type.
+exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
+// The runtime source of defaults. There is deliberately NO defaults/*.json
+// seed file: `storage_seed_files` copies into extension storage
+// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
+// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
+// seed was never read. loadSettings() spreads these defaults over whatever
+// userStorage returns (fallback {}), which fully covers fresh installs.
+exports.DEFAULT_SETTINGS = {
+    showFloatWidget: false,
+    toastOnInsert: true,
+    generationHistory: false,
+    gestureNavigation: false,
+    afterGenerate: 'ask_to_insert',
+    widgetSize: 'small',
+    widgetStyle: 'color',
+    iconTheme: 'aperture',
+    autoGenerate: 'off',
+    autoGenerateInterval: 3,
+    autoGenerateRandomMin: 3,
+    autoGenerateRandomMax: 7,
+    autoGenerateAfter: 'auto_insert',
+    autoPreviewPrompt: false,
+    defaultAction: 'append',
+    deleteConfirmation: 'bulk_only',
+    removeImageTagsFromContext: true,
+    showPromptInLightbox: false,
+    shutterImageLayout: 'off',
+    shutterImageWidth: 50,
+    shutterImageAlign: 'center',
+};
+// Shared by backend validation, the settings panel's percent input, and the
+// frontend's inline image-layout stylesheet.
+function clampShutterImageWidth(value) {
+    if (!Number.isFinite(value))
+        return 100;
+    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
+}
+// ── Validation ──
+// Pure; the backend is the authority (it validates on every load and save),
+// the frontend only mirrors validated settings echoed back over the channel.
+function validateSettings(s) {
+    const out = { ...s };
+    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
+    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
+    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
+    // saveSettings re-persists the whole merged object on every save, so the
+    // stale key never self-cleans from users' settings.json; strip it here on
+    // the next write. Safe to delete this line once 1.0.5-era installs have
+    // aged out.
+    delete out.forceGeneration;
+    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
+        out.iconTheme = 'aperture';
+    }
+    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
+    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
+    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
+    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
+        out.shutterImageLayout = 'off';
+    }
+    if (out.shutterImageAlign !== 'left' &&
+        out.shutterImageAlign !== 'center' &&
+        out.shutterImageAlign !== 'right') {
+        out.shutterImageAlign = 'center';
+    }
+    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
+    return out;
+}
+};
+
 __modules["./styles"] = function(module, exports, require) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.
@@ -4666,7 +4603,8 @@ exports.SHUTTER_CSS = `
       padding: 8px 0;
     }
 
-    /* Compact source controls shared by the modal and expanded lightbox. */
+    /* Compact source controls shared by the Image Prompt modal and the
+       expanded lightbox prompt area. */
     .sh-prompt-source-tabs {
       display: inline-flex;
       align-items: center;
@@ -4682,19 +4620,22 @@ exports.SHUTTER_CSS = `
       white-space: nowrap;
     }
     .sh-prompt-source-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
       min-width: 0;
-      min-height: 28px;
-      padding: 4px 10px;
+      padding: 2px 8px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
-      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.4;
       cursor: pointer;
+      white-space: nowrap;
       transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
     .sh-prompt-source-btn:hover {
@@ -4714,62 +4655,23 @@ exports.SHUTTER_CSS = `
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
 
-    /* Image Prompt uses the host modal shell, but constrains the extension
-       body so only the prompt boxes scroll. Header and footer stay visible. */
-    .sh-image-prompt-root {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      width: 100%;
-      min-height: 0;
+    /* Image Prompt keeps Shutter's established prompt-modal structure. The
+       host body is made non-scrolling in code; only these read-only prompt
+       boxes scroll internally, leaving the standard footer visible. */
+    .sh-image-prompt-root { width: 100%; min-height: 0; }
+    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 12px; }
+    .sh-image-prompt-meta { margin: 0; overflow-wrap: anywhere; }
+    .sh-image-prompt-fields { min-height: 0; overflow: hidden; }
+    .sh-image-prompt-readonly { box-sizing: border-box; }
+    .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
+    .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
+    .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }
+    .sh-image-prompt-actions { flex: 0 0 auto; }
+    @media (max-height: 520px) {
+      .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 92px; }
+      .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 52px; }
+      .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 156px; }
     }
-    .sh-image-prompt-body {
-      display: flex;
-      flex: 1 1 auto;
-      flex-direction: column;
-      min-height: 0;
-      height: min(420px, calc(var(--app-scaled-viewport-height, 100dvh) - 132px));
-      max-height: 100%;
-      gap: 10px;
-      overflow: hidden;
-    }
-    .sh-image-prompt-meta {
-      flex: 0 0 auto;
-      margin: 0;
-      overflow-wrap: anywhere;
-    }
-    .sh-image-prompt-fields {
-      display: grid;
-      flex: 1 1 auto;
-      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
-      min-height: 0;
-      gap: 10px;
-      overflow: hidden;
-    }
-    .sh-image-prompt-fields.sh-no-negative {
-      display: flex;
-    }
-    .sh-image-prompt-field {
-      min-height: 0;
-      overflow: hidden;
-    }
-    .sh-image-prompt-field-positive { flex: 1 1 auto; }
-    .sh-image-prompt-readonly {
-      flex: 1 1 auto;
-      height: auto;
-      min-height: 0;
-      max-height: none;
-    }
-    .sh-image-prompt-actions {
-      flex: 0 0 auto;
-      margin-top: auto;
-    }
-    .sh-image-prompt-loading-body .sh-prompt-viewer-status {
-      flex: 1 1 auto;
-      align-items: center;
-      justify-content: center;
-    }
-    .sh-modal-header-close-slot { display: inline-flex; align-items: center; }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the
        portal) ── The wrapper is fixed-positioned via JS and deliberately
@@ -5006,7 +4908,6 @@ exports.SHUTTER_CSS = `
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
 };
-
 
 
 const __cache = Object.create(null);

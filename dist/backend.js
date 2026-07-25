@@ -3000,21 +3000,64 @@ function createModals(deps) {
                 modalInputStack.splice(stackIndex, 1);
         });
     }
-    function mountModalHeaderClose(modal, onClick) {
+    function modalHostHeader(modal) {
         const hostBody = modal.root.parentElement;
         const hostHeader = hostBody?.previousElementSibling;
-        if (!(hostHeader instanceof HTMLElement))
+        return hostHeader instanceof HTMLElement ? hostHeader : null;
+    }
+    function setModalTitle(modal, title) {
+        // Current Spindle exposes setTitle(), but older/mobile hosts may not. Keep
+        // the logical history -> prompt surface swap working in either case.
+        try {
+            if (typeof modal.setTitle === 'function') {
+                modal.setTitle(title);
+                return;
+            }
+        }
+        catch {
+            // Fall through to the host header title element.
+        }
+        const titleElement = modalHostHeader(modal)?.querySelector('h3');
+        if (titleElement)
+            titleElement.textContent = title;
+    }
+    function mountModalHeaderClose(modal, onClick) {
+        const hostHeader = modalHostHeader(modal);
+        if (!hostHeader)
             return;
-        const slot = document.createElement('span');
-        slot.className = 'sh-modal-header-close-slot';
-        hostHeader.appendChild(slot);
-        const handle = ctx.components.mountCloseButton(slot, {
-            onClick,
-            size: 'sm',
-            variant: 'subtle',
-            ariaLabel: 'Close',
+        // Shared component mounts are restricted to extension-owned DOM. The modal
+        // header belongs to Lumiverse, so mounting ctx.components here throws and
+        // leaves an empty shell on mobile. A plain button is safe in host chrome.
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'sh-modal-header-close-native';
+        button.setAttribute('aria-label', 'Close');
+        button.title = 'Close';
+        Object.assign(button.style, {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flex: '0 0 auto',
+            background: 'none',
+            border: 'none',
+            color: 'var(--lumiverse-text-dim)',
+            cursor: 'pointer',
+            padding: '4px',
+            borderRadius: '4px',
+            lineHeight: '0',
         });
-        modal.onDismiss(() => handle.destroy());
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        const handleClick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+        };
+        button.addEventListener('click', handleClick);
+        hostHeader.appendChild(button);
+        modal.onDismiss(() => {
+            button.removeEventListener('click', handleClick);
+            button.remove();
+        });
     }
     function constrainImagePromptModal(modal) {
         const hostBody = modal.root.parentElement;
@@ -3056,7 +3099,7 @@ function createModals(deps) {
     }
     function renderImagePromptSurface(modal, options) {
         constrainImagePromptModal(modal);
-        modal.setTitle('Image Prompt');
+        setModalTitle(modal, 'Image Prompt');
         let activeView = options.initialView;
         const body = document.createElement('div');
         body.className = 'sh-prompt-body sh-image-prompt-body';
@@ -3562,7 +3605,7 @@ function createModals(deps) {
         }
         function renderHistorySurface() {
             surface = 'history';
-            modal.setTitle('Generation History');
+            setModalTitle(modal, 'Generation History');
             modal.root.classList.remove('sh-image-prompt-root');
             const hostBody = modal.root.parentElement;
             if (hostBody instanceof HTMLElement) {
@@ -3853,6 +3896,93 @@ function createModals(deps) {
             dismissLightbox();
         },
     };
+}
+};
+
+__modules["./settings"] = function(module, exports, require) {
+"use strict";
+// Shared settings model — the single source of truth for Shutter's settings
+// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
+// frontend.ts); bun bundles it into each dist file, so the host still sees
+// exactly two self-contained bundles. Everything here must stay
+// environment-neutral: no `spindle`, no DOM, no browser globals.
+//
+// Adding a setting touches this file only (type + default + validation),
+// plus wherever the setting is actually used.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
+exports.clampShutterImageWidth = clampShutterImageWidth;
+exports.validateSettings = validateSettings;
+// ── Icon IDs ──
+// Defined here (not icons.ts) so backend validation can consume the runtime
+// list without pulling the SVG payloads into the backend bundle. icons.ts
+// derives its ShutterIconSet record from this same type.
+exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
+// The runtime source of defaults. There is deliberately NO defaults/*.json
+// seed file: `storage_seed_files` copies into extension storage
+// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
+// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
+// seed was never read. loadSettings() spreads these defaults over whatever
+// userStorage returns (fallback {}), which fully covers fresh installs.
+exports.DEFAULT_SETTINGS = {
+    showFloatWidget: false,
+    toastOnInsert: true,
+    generationHistory: false,
+    gestureNavigation: false,
+    afterGenerate: 'ask_to_insert',
+    widgetSize: 'small',
+    widgetStyle: 'color',
+    iconTheme: 'aperture',
+    autoGenerate: 'off',
+    autoGenerateInterval: 3,
+    autoGenerateRandomMin: 3,
+    autoGenerateRandomMax: 7,
+    autoGenerateAfter: 'auto_insert',
+    autoPreviewPrompt: false,
+    defaultAction: 'append',
+    deleteConfirmation: 'bulk_only',
+    removeImageTagsFromContext: true,
+    showPromptInLightbox: false,
+    shutterImageLayout: 'off',
+    shutterImageWidth: 50,
+    shutterImageAlign: 'center',
+};
+// Shared by backend validation, the settings panel's percent input, and the
+// frontend's inline image-layout stylesheet.
+function clampShutterImageWidth(value) {
+    if (!Number.isFinite(value))
+        return 100;
+    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
+}
+// ── Validation ──
+// Pure; the backend is the authority (it validates on every load and save),
+// the frontend only mirrors validated settings echoed back over the channel.
+function validateSettings(s) {
+    const out = { ...s };
+    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
+    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
+    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
+    // saveSettings re-persists the whole merged object on every save, so the
+    // stale key never self-cleans from users' settings.json; strip it here on
+    // the next write. Safe to delete this line once 1.0.5-era installs have
+    // aged out.
+    delete out.forceGeneration;
+    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
+        out.iconTheme = 'aperture';
+    }
+    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
+    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
+    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
+    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
+        out.shutterImageLayout = 'off';
+    }
+    if (out.shutterImageAlign !== 'left' &&
+        out.shutterImageAlign !== 'center' &&
+        out.shutterImageAlign !== 'right') {
+        out.shutterImageAlign = 'center';
+    }
+    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
+    return out;
 }
 };
 
@@ -4344,93 +4474,6 @@ function createSettingsPanel(deps) {
         mount: mountSettings,
         destroy: destroySettingsHandles,
     };
-}
-};
-
-__modules["./settings"] = function(module, exports, require) {
-"use strict";
-// Shared settings model — the single source of truth for Shutter's settings
-// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
-// frontend.ts); bun bundles it into each dist file, so the host still sees
-// exactly two self-contained bundles. Everything here must stay
-// environment-neutral: no `spindle`, no DOM, no browser globals.
-//
-// Adding a setting touches this file only (type + default + validation),
-// plus wherever the setting is actually used.
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
-exports.clampShutterImageWidth = clampShutterImageWidth;
-exports.validateSettings = validateSettings;
-// ── Icon IDs ──
-// Defined here (not icons.ts) so backend validation can consume the runtime
-// list without pulling the SVG payloads into the backend bundle. icons.ts
-// derives its ShutterIconSet record from this same type.
-exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
-// The runtime source of defaults. There is deliberately NO defaults/*.json
-// seed file: `storage_seed_files` copies into extension storage
-// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
-// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
-// seed was never read. loadSettings() spreads these defaults over whatever
-// userStorage returns (fallback {}), which fully covers fresh installs.
-exports.DEFAULT_SETTINGS = {
-    showFloatWidget: false,
-    toastOnInsert: true,
-    generationHistory: false,
-    gestureNavigation: false,
-    afterGenerate: 'ask_to_insert',
-    widgetSize: 'small',
-    widgetStyle: 'color',
-    iconTheme: 'aperture',
-    autoGenerate: 'off',
-    autoGenerateInterval: 3,
-    autoGenerateRandomMin: 3,
-    autoGenerateRandomMax: 7,
-    autoGenerateAfter: 'auto_insert',
-    autoPreviewPrompt: false,
-    defaultAction: 'append',
-    deleteConfirmation: 'bulk_only',
-    removeImageTagsFromContext: true,
-    showPromptInLightbox: false,
-    shutterImageLayout: 'off',
-    shutterImageWidth: 50,
-    shutterImageAlign: 'center',
-};
-// Shared by backend validation, the settings panel's percent input, and the
-// frontend's inline image-layout stylesheet.
-function clampShutterImageWidth(value) {
-    if (!Number.isFinite(value))
-        return 100;
-    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
-}
-// ── Validation ──
-// Pure; the backend is the authority (it validates on every load and save),
-// the frontend only mirrors validated settings echoed back over the channel.
-function validateSettings(s) {
-    const out = { ...s };
-    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
-    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
-    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
-    // saveSettings re-persists the whole merged object on every save, so the
-    // stale key never self-cleans from users' settings.json; strip it here on
-    // the next write. Safe to delete this line once 1.0.5-era installs have
-    // aged out.
-    delete out.forceGeneration;
-    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
-        out.iconTheme = 'aperture';
-    }
-    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
-    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
-    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
-    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
-        out.shutterImageLayout = 'off';
-    }
-    if (out.shutterImageAlign !== 'left' &&
-        out.shutterImageAlign !== 'center' &&
-        out.shutterImageAlign !== 'right') {
-        out.shutterImageAlign = 'center';
-    }
-    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
-    return out;
 }
 };
 
@@ -4963,6 +5006,7 @@ exports.SHUTTER_CSS = `
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
 };
+
 
 
 const __cache = Object.create(null);

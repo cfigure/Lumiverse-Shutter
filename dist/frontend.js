@@ -1,5 +1,6 @@
 // Generated bundle for Lumiverse Shutter 1.0.7.
 const __modules = Object.create(null);
+
 __modules["./backend"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -541,7 +542,9 @@ if (!spindle.permissions.has('interceptor')) {
     spindle.log.warn('[context-tags] "interceptor" permission not granted; Shutter image tags will remain in context.');
 }
 spindle.log.info('Shutter loaded!');
+
 };
+
 __modules["./comms"] = function(module, exports, require) {
 "use strict";
 // Spindle message-channel round-trips, correlated by requestId with timeout
@@ -645,7 +648,9 @@ function createComms(ctx) {
         dispose,
     };
 }
+
 };
+
 __modules["./frontend"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1393,7 +1398,9 @@ function setup(ctx) {
         ctx.dom.cleanup();
     };
 }
+
 };
+
 __modules["./history"] = function(module, exports, require) {
 "use strict";
 // Durable Shutter generation-history data shared by the frontend and backend.
@@ -1478,7 +1485,9 @@ function formatPromptMetadataForClipboard(view) {
         lines.push('', 'Negative Prompt', view.negativePrompt);
     return lines.join('\n');
 }
+
 };
+
 __modules["./icons"] = function(module, exports, require) {
 "use strict";
 // Shutter icon SVG paths. The mono and colour variants share identical geometry
@@ -1608,7 +1617,9 @@ exports.ICON_SETS = {
 function getIconSet(iconId) {
     return exports.ICON_SETS[iconId] ?? exports.ICON_SETS.aperture;
 }
+
 };
+
 __modules["./lightbox"] = function(module, exports, require) {
 "use strict";
 // The lightbox prompt label: click-driven detection of the native image
@@ -1702,8 +1713,8 @@ function createLightboxPromptLabel(deps) {
     const PROMPT_EXPANDED_MAX = 480;
     const PROMPT_MOBILE_EXPANDED_MAX = 260;
     const PROMPT_PILL_HEIGHT = 44;
-    // The compact strip is content-width; expanded prompt sizing remains
-    // image-aware using the desktop/mobile bounds above.
+    const PROMPT_PILL_DESKTOP_WIDTH = 360;
+    const PROMPT_PILL_MOBILE_WIDTH = 320;
     // Seed value for the expanded reserve only — the live value is measured
     // from the panel's actual rendered height (content-aware) at expand time.
     const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE; // 176
@@ -1846,7 +1857,7 @@ function createLightboxPromptLabel(deps) {
                 const visible = area >= 10000 && intersectsViewport(rect);
                 // Prefer the fully laid-out lightbox image, but accept the pre-load
                 // <img> too so the loading shell can appear during the native spinner.
-                const score = (visible ? 1_000_000_000 : 0) + area;
+                const score = (visible ? 1000000000 : 0) + area;
                 if (!best || score > best.score)
                     best = { portalRoot, img, score };
             }
@@ -2302,19 +2313,14 @@ function createLightboxPromptLabel(deps) {
                 : (isCompact
                     ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
                     : Math.min(Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH), PROMPT_DESKTOP_MAX_WIDTH, viewportMax));
-            // Collapsed mode is a true content-width toolbar. Write fit-content
-            // before measuring so a prior expanded width or inherited minimum
-            // cannot stretch it across the lightbox.
-            if (!isExpanded) {
-                setStyleIfChanged(ws, 'width', 'fit-content');
-                setStyleIfChanged(ws, 'min-width', '0px');
-                setStyleIfChanged(ws, 'max-width', `${viewportMax}px`);
-            }
-            else {
-                setStyleIfChanged(ws, 'width', `${expandedWidth}px`);
-                setStyleIfChanged(ws, 'min-width', '0px');
-                setStyleIfChanged(ws, 'max-width', `${viewportMax}px`);
-            }
+            // Restore the stable 1.0.6 collapsed width so different action
+            // combinations and the temporary Copied state never resize the bar.
+            // Expanded prompt sizing remains image-aware.
+            const collapsedWidth = Math.min(isCompact ? PROMPT_PILL_MOBILE_WIDTH : PROMPT_PILL_DESKTOP_WIDTH, viewportMax);
+            const toolbarWidth = isExpanded ? expandedWidth : collapsedWidth;
+            setStyleIfChanged(ws, 'width', `${toolbarWidth}px`);
+            setStyleIfChanged(ws, 'min-width', '0px');
+            setStyleIfChanged(ws, 'max-width', `${viewportMax}px`);
             if (rect.width === 0 || rect.height === 0) {
                 // Native lightbox mounts the <img> before it has natural dimensions.
                 // Keep the loading shell visible near the spinner until the image has
@@ -2327,9 +2333,7 @@ function createLightboxPromptLabel(deps) {
                 }
                 return;
             }
-            const measuredWidth = isExpanded
-                ? expandedWidth
-                : Math.min(wrapper.getBoundingClientRect().width / uiScale, viewportMax);
+            const measuredWidth = toolbarWidth;
             const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - measuredWidth) / 2, viewportWidthLocal - measuredWidth - EDGE));
             setStyleIfChanged(ws, 'top', `${rectBottom + GAP}px`);
             setStyleIfChanged(ws, 'left', `${left}px`);
@@ -2796,7 +2800,9 @@ function createLightboxPromptLabel(deps) {
         dispose,
     };
 }
+
 };
+
 __modules["./metadata"] = function(module, exports, require) {
 "use strict";
 // Image-metadata resolution: PNG text-chunk parsing and provider prompt
@@ -2964,7 +2970,9 @@ function extractImageId(src) {
     const match = src.match(exports.IMAGE_URL_RE);
     return match ? match[1] : null;
 }
+
 };
+
 __modules["./modals"] = function(module, exports, require) {
 "use strict";
 // Shutter's modal surfaces: the post-generation destination modal, the
@@ -3469,7 +3477,7 @@ function createModals(deps) {
         };
         isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface });
         const container = document.createElement('div');
-        container.className = 'sh-modal-body';
+        container.className = 'sh-modal-body sh-history-body';
         const previewWrap = document.createElement('div');
         previewWrap.className = 'sh-preview';
         const preview = document.createElement('img');
@@ -3882,7 +3890,9 @@ function createModals(deps) {
         },
     };
 }
+
 };
+
 __modules["./settings-panel"] = function(module, exports, require) {
 "use strict";
 // The extension settings panel (mount-once pattern): host shared components
@@ -4372,7 +4382,9 @@ function createSettingsPanel(deps) {
         destroy: destroySettingsHandles,
     };
 }
+
 };
+
 __modules["./settings"] = function(module, exports, require) {
 "use strict";
 // Shared settings model — the single source of truth for Shutter's settings
@@ -4458,7 +4470,9 @@ function validateSettings(s) {
     out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
     return out;
 }
+
 };
+
 __modules["./styles"] = function(module, exports, require) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.
@@ -4529,13 +4543,17 @@ exports.SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
+    .sh-history-body { gap: 10px; }
+    .sh-history-body .sh-preview img { max-height: min(36vh, 360px); }
     .sh-history-summary {
       min-width: 0;
+      padding: 0 2px 2px;
       color: var(--lumiverse-text-muted, #999);
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
+    .sh-history-actions { margin-top: 2px; }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
@@ -4704,10 +4722,16 @@ exports.SHUTTER_CSS = `
        host body is made non-scrolling in code; only these read-only prompt
        boxes scroll internally, leaving the standard footer visible. */
     .sh-image-prompt-root { width: 100%; min-height: 0; }
-    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 12px; }
-    .sh-image-prompt-meta { margin: 0; overflow-wrap: anywhere; }
-    .sh-image-prompt-fields { min-height: 0; overflow: hidden; }
-    .sh-image-prompt-readonly { box-sizing: border-box; }
+    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-meta {
+      margin: -2px 0 0;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .sh-image-prompt-fields { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-readonly { box-sizing: border-box; cursor: text; }
     .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
     .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
     .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }
@@ -4803,7 +4827,6 @@ exports.SHUTTER_CSS = `
       gap: 4px;
       white-space: nowrap;
       flex-shrink: 0;
-      min-width: 6.25em;
       justify-content: center;
       margin-left: auto;
       padding: 2px 8px;
@@ -4902,7 +4925,7 @@ exports.SHUTTER_CSS = `
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
     .sh-lightbox-prompt.sh-pill {
-      width: fit-content;
+      width: 100%;
       min-width: 0;
       height: var(--sh-prompt-pill-height, 44px);
       max-height: var(--sh-prompt-pill-height, 44px);
@@ -4912,8 +4935,9 @@ exports.SHUTTER_CSS = `
       white-space: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-heading {
-      width: auto;
+      width: 100%;
       min-width: 0;
+      justify-content: center;
       padding-bottom: 0;
       margin-bottom: 0;
       border-bottom: 0;
@@ -4923,7 +4947,7 @@ exports.SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
       width: auto;
       min-width: 0;
-      justify-content: flex-end;
+      justify-content: center;
       gap: 5px;
       margin-left: 0;
       flex-wrap: nowrap;
@@ -4954,8 +4978,8 @@ exports.SHUTTER_CSS = `
 // Shared by the lightbox pill's Copy and the View Prompt modal's Copy —
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
-};
 
+};
 
 const __cache = Object.create(null);
 function __normalise(id) {

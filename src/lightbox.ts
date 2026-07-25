@@ -40,7 +40,7 @@ export function createLightboxPromptLabel(deps: {
   comms: Comms
   getSettings: () => Settings | null
   hasPermission: (permission: string) => boolean
-  openHistory: (records: GenerationHistoryRecord[], imageId: string) => void
+  openHistory: (records: GenerationHistoryRecord[], imageId: string, closeUnderlyingLightbox?: () => void) => void
 }) {
   const { ctx, comms } = deps
 
@@ -498,7 +498,7 @@ export function createLightboxPromptLabel(deps: {
       const historyButton = sources.history.length > 0
         ? `<button type="button" class="sh-prompt-history-btn">View History · ${sources.history.length}</button>`
         : ''
-      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}${historyButton}`
+      return `${selector}${historyButton}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
     }
 
     // Inject a stable shell immediately — or, when metadata already settled,
@@ -914,7 +914,27 @@ export function createLightboxPromptLabel(deps: {
       })
       contentEl.querySelector<HTMLButtonElement>('.sh-prompt-history-btn')?.addEventListener('click', () => {
         if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId) return
-        deps.openHistory(promptSources.history, promptSources.imageId)
+
+        // The history viewer is a Spindle modal layered above Lumiverse's
+        // native image lightbox. Insert/Replace should commit the selected
+        // image and then close that exact underlying viewer as one action.
+        // Capture this portal/image pair so a delayed close can never affect
+        // a different lightbox opened afterwards.
+        const closeUnderlyingLightbox = () => {
+          if (!portalRoot.isConnected || !img.isConnected) return
+          dismissLabel()
+          setTimeout(() => {
+            if (!portalRoot.isConnected || !img.isConnected) return
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Escape',
+              code: 'Escape',
+              bubbles: true,
+              cancelable: true,
+            }))
+          }, 0)
+        }
+
+        deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox)
       })
     }
 

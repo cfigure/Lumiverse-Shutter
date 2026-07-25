@@ -13,7 +13,7 @@ import {
 type FrontendMessage =
   | { type: 'request_settings' }
   | { type: 'update_settings'; settings: Partial<Settings> }
-  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; target?: GenerationTarget; replace?: boolean }
+  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; target?: GenerationTarget; replace?: boolean; replaceImageId?: string }
   | { type: 'resolve_generation_target'; requestId: string; chatId: string; messageId: string }
   | { type: 'append_generation_history'; requestId: string; target: GenerationTarget; entry: GenerationHistoryInput }
   | { type: 'get_generation_history'; requestId: string; target: GenerationTarget }
@@ -265,6 +265,21 @@ function stripLastShutterImage(content: string): { content: string; found: boole
   return { content: content.slice(0, match.index), found: true }
 }
 
+function shutterImageIdPattern(imageId: string): RegExp {
+  const escaped = imageId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(String.raw`\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/${escaped}\)`, 'i')
+}
+
+function stripShutterImageById(content: string, imageId: string): { content: string; found: boolean } {
+  const re = shutterImageIdPattern(imageId)
+  if (!re.test(content)) return { content, found: false }
+  return { content: content.replace(re, ''), found: true }
+}
+
+function containsShutterImageId(content: string, imageId: string): boolean {
+  return shutterImageIdPattern(imageId).test(content)
+}
+
 function stripAllShutterImages(content: string): { content: string; count: number } {
   let count = 0
   const stripped = content.replace(SHUTTER_IMAGE_GLOBAL_RE, () => { count++; return '' })
@@ -478,20 +493,35 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 
         const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
         let baseContent = message.swipes[swipeIndex] ?? message.content
-        if (baseContent.includes(imageUrl)) {
-          spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
-          return
-        }
-
         let didReplace = false
+
         if (payload.replace) {
-          const stripped = stripLastShutterImage(baseContent)
+          const stripped = payload.replaceImageId
+            ? stripShutterImageById(baseContent, payload.replaceImageId)
+            : stripLastShutterImage(baseContent)
+          if (payload.replaceImageId && !stripped.found) {
+            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId })
+            return
+          }
           baseContent = stripped.content
           didReplace = stripped.found
         }
 
+        // A selected history image may already exist elsewhere in the same
+        // response. In replace mode, removing the exact source image is still
+        // the requested mutation, so avoid adding a duplicate. In insert mode,
+        // retain the existing no-op behaviour.
+        if (containsShutterImageId(baseContent, payload.imageId)) {
+          if (!didReplace) {
+            spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
+            return
+          }
+        } else {
+          baseContent += `\n\n![shutter](${imageUrl})`
+        }
+
         const swipes = [...message.swipes]
-        swipes[swipeIndex] = baseContent + `\n\n![shutter](${imageUrl})`
+        swipes[swipeIndex] = baseContent
         await spindle.chat.updateMessage(payload.chatId, message.id, {
           swipes,
           swipe_dates: [...message.swipe_dates],

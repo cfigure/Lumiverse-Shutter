@@ -337,13 +337,13 @@ export function setup(ctx: SpindleFrontendContext) {
   // indirection so its expanded View History action can open the shared
   // history viewer without changing the compact mobile pill or construction
   // order.
-  let openHistoryFromLightbox: (records: GenerationHistoryRecord[], imageId: string) => void = () => {}
+  let openHistoryFromLightbox: (records: GenerationHistoryRecord[], imageId: string, closeUnderlyingLightbox?: () => void) => void = () => {}
   const lightboxPromptLabel = createLightboxPromptLabel({
     ctx,
     comms,
     getSettings: () => settings,
     hasPermission: (p) => grantedPermissions.has(p),
-    openHistory: (records, imageId) => openHistoryFromLightbox(records, imageId),
+    openHistory: (records, imageId, closeUnderlyingLightbox) => openHistoryFromLightbox(records, imageId, closeUnderlyingLightbox),
   })
 
   // ── Post-generation handling ──
@@ -717,7 +717,7 @@ export function setup(ctx: SpindleFrontendContext) {
     notifyGenerationSkipped,
     parseErrorMessage,
   })
-  openHistoryFromLightbox = (records, imageId) => modals.openHistoryViewer(records, imageId)
+  openHistoryFromLightbox = (records, imageId, closeUnderlyingLightbox) => modals.openHistoryViewer(records, imageId, closeUnderlyingLightbox)
 
   // ── Backend messages ──
 

@@ -65,6 +65,13 @@ export const SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
+    .sh-history-summary {
+      min-width: 0;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
@@ -179,27 +186,33 @@ export const SHUTTER_CSS = `
 
     /* One-source-at-a-time prompt metadata selector. In the compact native
        lightbox pill this content is hidden with the rest of the body, so the
-       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile. */
+       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile.
+       The expanded control is deliberately compact: it chooses a source, but
+       should not visually compete with the prompt itself. */
     .sh-prompt-source-tabs {
-      display: grid;
+      display: inline-grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 3px;
-      padding: 3px;
-      margin-bottom: 10px;
+      align-self: flex-start;
+      width: min(100%, 320px);
+      gap: 2px;
+      padding: 2px;
+      margin-bottom: 8px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 8px);
+      border-radius: var(--lcs-radius-sm, 7px);
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04));
     }
     .sh-prompt-source-btn {
       min-width: 0;
-      padding: 6px 10px;
+      min-height: 28px;
+      padding: 4px 12px;
       border: 0;
-      border-radius: 6px;
+      border-radius: 5px;
       background: transparent;
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
+      line-height: 1.2;
       cursor: pointer;
       transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
@@ -218,7 +231,7 @@ export const SHUTTER_CSS = `
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
     .sh-prompt-history-btn {
       width: 100%;
-      margin-top: 12px;
+      margin: 0 0 10px;
       padding: 8px 10px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.1));
       border-radius: var(--lcs-radius-sm, 8px);
@@ -233,6 +246,9 @@ export const SHUTTER_CSS = `
     .sh-prompt-history-btn:hover {
       background: var(--lumiverse-fill-medium, rgba(255,255,255,0.09));
       border-color: var(--lumiverse-border-strong, rgba(255,255,255,0.18));
+    }
+    @media (max-width: 560px) {
+      .sh-prompt-source-tabs { width: 100%; }
     }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the

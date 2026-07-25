@@ -201,6 +201,19 @@ function stripLastShutterImage(content) {
         return { content, found: false };
     return { content: content.slice(0, match.index), found: true };
 }
+function shutterImageIdPattern(imageId) {
+    const escaped = imageId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(String.raw `\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/${escaped}\)`, 'i');
+}
+function stripShutterImageById(content, imageId) {
+    const re = shutterImageIdPattern(imageId);
+    if (!re.test(content))
+        return { content, found: false };
+    return { content: content.replace(re, ''), found: true };
+}
+function containsShutterImageId(content, imageId) {
+    return shutterImageIdPattern(imageId).test(content);
+}
 function stripAllShutterImages(content) {
     let count = 0;
     const stripped = content.replace(SHUTTER_IMAGE_GLOBAL_RE, () => { count++; return ''; });
@@ -382,18 +395,33 @@ spindle.onFrontendMessage(async (raw, userId) => {
                 }
                 const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
                 let baseContent = message.swipes[swipeIndex] ?? message.content;
-                if (baseContent.includes(imageUrl)) {
-                    spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
-                    return;
-                }
                 let didReplace = false;
                 if (payload.replace) {
-                    const stripped = stripLastShutterImage(baseContent);
+                    const stripped = payload.replaceImageId
+                        ? stripShutterImageById(baseContent, payload.replaceImageId)
+                        : stripLastShutterImage(baseContent);
+                    if (payload.replaceImageId && !stripped.found) {
+                        spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
+                        return;
+                    }
                     baseContent = stripped.content;
                     didReplace = stripped.found;
                 }
+                // A selected history image may already exist elsewhere in the same
+                // response. In replace mode, removing the exact source image is still
+                // the requested mutation, so avoid adding a duplicate. In insert mode,
+                // retain the existing no-op behaviour.
+                if (containsShutterImageId(baseContent, payload.imageId)) {
+                    if (!didReplace) {
+                        spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
+                        return;
+                    }
+                }
+                else {
+                    baseContent += `\n\n![shutter](${imageUrl})`;
+                }
                 const swipes = [...message.swipes];
-                swipes[swipeIndex] = baseContent + `\n\n![shutter](${imageUrl})`;
+                swipes[swipeIndex] = baseContent;
                 await spindle.chat.updateMessage(payload.chatId, message.id, {
                     swipes,
                     swipe_dates: [...message.swipe_dates],
@@ -880,7 +908,7 @@ function setup(ctx) {
         comms,
         getSettings: () => settings,
         hasPermission: (p) => grantedPermissions.has(p),
-        openHistory: (records, imageId) => openHistoryFromLightbox(records, imageId),
+        openHistory: (records, imageId, closeUnderlyingLightbox) => openHistoryFromLightbox(records, imageId, closeUnderlyingLightbox),
     });
     // ── Post-generation handling ──
     // Native parity note: when a generation is skipped (scene unchanged), the
@@ -1234,7 +1262,7 @@ function setup(ctx) {
         notifyGenerationSkipped,
         parseErrorMessage,
     });
-    openHistoryFromLightbox = (records, imageId) => modals.openHistoryViewer(records, imageId);
+    openHistoryFromLightbox = (records, imageId, closeUnderlyingLightbox) => modals.openHistoryViewer(records, imageId, closeUnderlyingLightbox);
     // ── Backend messages ──
     const unsubBackend = ctx.onBackendMessage((payload) => {
         // Round-trip replies are consumed by comms.
@@ -1960,7 +1988,7 @@ function createLightboxPromptLabel(deps) {
             const historyButton = sources.history.length > 0
                 ? `<button type="button" class="sh-prompt-history-btn">View History · ${sources.history.length}</button>`
                 : '';
-            return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}${historyButton}`;
+            return `${selector}${historyButton}<div class="sh-prompt-source-meta">${escapeHtml(details.join(' · '))}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
         }
         // Inject a stable shell immediately — or, when metadata already settled,
         // the finished label directly. The shell avoids the jarring delayed box
@@ -2371,7 +2399,27 @@ function createLightboxPromptLabel(deps) {
             contentEl.querySelector('.sh-prompt-history-btn')?.addEventListener('click', () => {
                 if (!promptSources || promptSources.history.length === 0 || !promptSources.imageId)
                     return;
-                deps.openHistory(promptSources.history, promptSources.imageId);
+                // The history viewer is a Spindle modal layered above Lumiverse's
+                // native image lightbox. Insert/Replace should commit the selected
+                // image and then close that exact underlying viewer as one action.
+                // Capture this portal/image pair so a delayed close can never affect
+                // a different lightbox opened afterwards.
+                const closeUnderlyingLightbox = () => {
+                    if (!portalRoot.isConnected || !img.isConnected)
+                        return;
+                    dismissLabel();
+                    setTimeout(() => {
+                        if (!portalRoot.isConnected || !img.isConnected)
+                            return;
+                        document.dispatchEvent(new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            bubbles: true,
+                            cancelable: true,
+                        }));
+                    }, 0);
+                };
+                deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox);
             });
         }
         function setPromptExpanded(expanded) {
@@ -3166,7 +3214,7 @@ function createModals(deps) {
         });
     }
     let activeHistoryViewerModal = null;
-    function openHistoryViewer(records, initialImageId) {
+    function openHistoryViewer(records, initialImageId, closeUnderlyingLightbox) {
         const history = [...records].sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId));
         if (history.length === 0)
             return;
@@ -3175,9 +3223,14 @@ function createModals(deps) {
         if (idx < 0)
             idx = history.length - 1;
         const current = () => history[idx];
+        // Match the Image Generated modal's shell, width, preview sizing, and
+        // footer placement. History is an image-selection surface; the full
+        // prompt belongs in the focused read-only viewer opened from View Prompt.
         const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true });
         activeHistoryViewerModal = modal;
         isolateModalInput(modal, { blockArrows: false });
+        let promptModal = null;
+        let historyPromptOpen = false;
         const container = document.createElement('div');
         container.className = 'sh-modal-body';
         const previewWrap = document.createElement('div');
@@ -3201,57 +3254,21 @@ function createModals(deps) {
         nav.append(prev, count, next);
         previewWrap.appendChild(nav);
         container.appendChild(previewWrap);
-        const details = document.createElement('div');
-        details.className = 'sh-prompt-source-fields';
-        container.appendChild(details);
+        const summary = document.createElement('div');
+        summary.className = 'sh-history-summary';
+        container.appendChild(summary);
         const actions = document.createElement('div');
-        actions.className = 'sh-prompt-actions';
+        actions.className = 'sh-prompt-actions sh-history-actions';
         const closeBtn = document.createElement('button');
         closeBtn.type = 'button';
         closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
         closeBtn.textContent = 'Close';
         closeBtn.addEventListener('click', () => modal.dismiss());
-        const copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
-        copyBtn.textContent = 'Copy';
-        copyBtn.addEventListener('click', () => {
-            const view = (0, history_1.promptViewFromRecord)(current());
-            navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(view)).then(() => {
-                copyBtn.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
-                copyBtn.classList.add('sh-copied');
-                setTimeout(() => {
-                    if (!copyBtn.isConnected)
-                        return;
-                    copyBtn.textContent = 'Copy';
-                    copyBtn.classList.remove('sh-copied');
-                }, 2000);
-            }).catch(() => {
-                copyBtn.textContent = 'Failed';
-                setTimeout(() => { if (copyBtn.isConnected)
-                    copyBtn.textContent = 'Copy'; }, 1200);
-            });
-        });
-        const insertBtn = document.createElement('button');
-        insertBtn.type = 'button';
-        insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary';
-        insertBtn.textContent = 'Insert';
-        insertBtn.title = 'Insert this image into its original message response';
-        insertBtn.addEventListener('click', () => {
-            const entry = current();
-            ctx.sendToBackend({
-                type: 'insert_into_message',
-                imageId: entry.imageId,
-                messageId: entry.target.messageId,
-                chatId: entry.target.chatId,
-                target: entry.target,
-                replace: false,
-            });
-            modal.dismiss();
-        });
-        actions.append(closeBtn, copyBtn, insertBtn);
-        container.appendChild(actions);
-        modal.root.appendChild(container);
+        const viewPromptBtn = document.createElement('button');
+        viewPromptBtn.type = 'button';
+        viewPromptBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+        viewPromptBtn.textContent = 'View Prompt';
+        viewPromptBtn.title = 'View and copy the prompt saved for this generation';
         const makeReadonlyField = (label, text, short = false) => {
             const field = document.createElement('div');
             field.className = 'sh-prompt-field';
@@ -3264,25 +3281,116 @@ function createModals(deps) {
             field.append(heading, block);
             return field;
         };
+        const openSelectedPrompt = () => {
+            if (historyPromptOpen)
+                return;
+            historyPromptOpen = true;
+            viewPromptBtn.disabled = true;
+            const view = (0, history_1.promptViewFromRecord)(current());
+            const viewer = ctx.ui.showModal({ title: 'Generation Prompt', width: 640, persistent: true });
+            promptModal = viewer;
+            isolateModalInput(viewer);
+            const body = document.createElement('div');
+            body.className = 'sh-prompt-body';
+            const subtitle = document.createElement('p');
+            subtitle.className = 'sh-prompt-subtitle';
+            subtitle.textContent = 'The exact prompt saved by Shutter for this generation.';
+            body.appendChild(subtitle);
+            const meta = document.createElement('div');
+            meta.className = 'sh-prompt-source-meta';
+            const metaParts = ['Saved by Shutter'];
+            if (view.createdAt)
+                metaParts.push(new Date(view.createdAt).toLocaleString());
+            if (view.promptMode)
+                metaParts.push(`Mode: ${(0, history_1.humanisePromptMode)(view.promptMode)}`);
+            if (view.origin)
+                metaParts.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(view.origin)}`);
+            meta.textContent = metaParts.join(' · ');
+            body.appendChild(meta);
+            body.appendChild(makeReadonlyField('Prompt', view.prompt || 'Prompt unavailable'));
+            if (view.negativePrompt)
+                body.appendChild(makeReadonlyField('Negative Prompt', view.negativePrompt, true));
+            const promptActions = document.createElement('div');
+            promptActions.className = 'sh-prompt-actions';
+            const promptCloseBtn = document.createElement('button');
+            promptCloseBtn.type = 'button';
+            promptCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel';
+            promptCloseBtn.textContent = 'Close';
+            promptCloseBtn.addEventListener('click', () => viewer.dismiss());
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText((0, history_1.formatPromptMetadataForClipboard)(view)).then(() => {
+                    copyBtn.innerHTML = `${styles_1.COPY_CHECK_SVG} Copied`;
+                    copyBtn.classList.add('sh-copied');
+                    setTimeout(() => {
+                        if (!copyBtn.isConnected)
+                            return;
+                        copyBtn.textContent = 'Copy';
+                        copyBtn.classList.remove('sh-copied');
+                    }, 2000);
+                }).catch(() => {
+                    copyBtn.textContent = 'Failed';
+                    setTimeout(() => { if (copyBtn.isConnected)
+                        copyBtn.textContent = 'Copy'; }, 1200);
+                });
+            });
+            promptActions.append(promptCloseBtn, copyBtn);
+            body.appendChild(promptActions);
+            viewer.root.appendChild(body);
+            viewer.onDismiss(() => {
+                historyPromptOpen = false;
+                promptModal = null;
+                if (viewPromptBtn.isConnected)
+                    viewPromptBtn.disabled = false;
+            });
+        };
+        viewPromptBtn.addEventListener('click', openSelectedPrompt);
+        const commitSelected = (replace) => {
+            const entry = current();
+            ctx.sendToBackend({
+                type: 'insert_into_message',
+                imageId: entry.imageId,
+                messageId: entry.target.messageId,
+                chatId: entry.target.chatId,
+                target: entry.target,
+                replace,
+                // History was opened from a concrete lightbox image. Replace that
+                // exact tag, not whichever Shutter image happens to be last now.
+                replaceImageId: replace ? initialImageId : undefined,
+            });
+            modal.dismiss();
+            closeUnderlyingLightbox?.();
+        };
+        const replaceBtn = document.createElement('button');
+        replaceBtn.type = 'button';
+        replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+        replaceBtn.textContent = 'Replace';
+        replaceBtn.title = 'Replace the image that opened Generation History';
+        replaceBtn.addEventListener('click', () => commitSelected(true));
+        const insertBtn = document.createElement('button');
+        insertBtn.type = 'button';
+        insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary';
+        insertBtn.textContent = 'Insert';
+        insertBtn.title = 'Insert this image into its original message response';
+        insertBtn.addEventListener('click', () => commitSelected(false));
+        actions.append(closeBtn, viewPromptBtn, replaceBtn, insertBtn);
+        container.appendChild(actions);
+        modal.root.appendChild(container);
         function render() {
             const entry = current();
             preview.src = (0, history_1.imageUrlForHistoryRecord)(entry);
             count.textContent = `${idx + 1} / ${history.length}`;
             prev.disabled = idx === 0;
             next.disabled = idx === history.length - 1;
-            details.innerHTML = '';
-            const meta = document.createElement('div');
-            meta.className = 'sh-prompt-source-meta';
             const metaParts = [new Date(entry.createdAt).toLocaleString()];
             if (entry.promptMode)
                 metaParts.push(`Mode: ${(0, history_1.humanisePromptMode)(entry.promptMode)}`);
             if (entry.origin)
                 metaParts.push(`Action: ${(0, history_1.humaniseGenerationOrigin)(entry.origin)}`);
-            meta.textContent = metaParts.join(' · ');
-            details.appendChild(meta);
-            details.appendChild(makeReadonlyField('Prompt', entry.prompt || 'Prompt unavailable'));
-            if (entry.negativePrompt)
-                details.appendChild(makeReadonlyField('Negative Prompt', entry.negativePrompt, true));
+            summary.textContent = metaParts.join(' · ');
             if (activeLightbox) {
                 const lightboxImage = activeLightbox.overlay.querySelector('img');
                 if (lightboxImage)
@@ -3301,7 +3409,7 @@ function createModals(deps) {
         const arrowHandler = (event) => {
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
                 return;
-            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target))
+            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || historyPromptOpen || isEditableTarget(event.target))
                 return;
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -3318,6 +3426,8 @@ function createModals(deps) {
             touchStartY = touch.clientY;
         }, { passive: true });
         previewWrap.addEventListener('touchend', event => {
+            if (historyPromptOpen)
+                return;
             const touch = event.changedTouches[0];
             if (!touch)
                 return;
@@ -3330,6 +3440,7 @@ function createModals(deps) {
         modal.onDismiss(() => {
             if (activeHistoryViewerModal === modal)
                 activeHistoryViewerModal = null;
+            promptModal?.dismiss();
             dismissLightbox();
             window.removeEventListener('keydown', arrowHandler, { capture: true });
         });
@@ -3414,13 +3525,13 @@ function createModals(deps) {
         closeBtn.addEventListener('click', () => modal.dismiss());
         const historyBtn = document.createElement('button');
         historyBtn.type = 'button';
-        historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary';
+        historyBtn.className = 'sh-prompt-history-btn';
         historyBtn.textContent = 'View History';
         historyBtn.hidden = true;
-        actions.appendChild(historyBtn);
         actions.appendChild(copyBtn);
         actions.appendChild(closeBtn);
         container.appendChild(sourceSlot);
+        container.appendChild(historyBtn);
         container.appendChild(fieldsSlot);
         container.appendChild(actions);
         modal.root.appendChild(container);
@@ -4303,6 +4414,13 @@ exports.SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
+    .sh-history-summary {
+      min-width: 0;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
@@ -4417,27 +4535,33 @@ exports.SHUTTER_CSS = `
 
     /* One-source-at-a-time prompt metadata selector. In the compact native
        lightbox pill this content is hidden with the rest of the body, so the
-       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile. */
+       existing PROMPT / VIEW / COPY / × header remains unchanged on mobile.
+       The expanded control is deliberately compact: it chooses a source, but
+       should not visually compete with the prompt itself. */
     .sh-prompt-source-tabs {
-      display: grid;
+      display: inline-grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 3px;
-      padding: 3px;
-      margin-bottom: 10px;
+      align-self: flex-start;
+      width: min(100%, 320px);
+      gap: 2px;
+      padding: 2px;
+      margin-bottom: 8px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 8px);
+      border-radius: var(--lcs-radius-sm, 7px);
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04));
     }
     .sh-prompt-source-btn {
       min-width: 0;
-      padding: 6px 10px;
+      min-height: 28px;
+      padding: 4px 12px;
       border: 0;
-      border-radius: 6px;
+      border-radius: 5px;
       background: transparent;
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
-      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
+      line-height: 1.2;
       cursor: pointer;
       transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
@@ -4456,7 +4580,7 @@ exports.SHUTTER_CSS = `
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
     .sh-prompt-history-btn {
       width: 100%;
-      margin-top: 12px;
+      margin: 0 0 10px;
       padding: 8px 10px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.1));
       border-radius: var(--lcs-radius-sm, 8px);
@@ -4471,6 +4595,9 @@ exports.SHUTTER_CSS = `
     .sh-prompt-history-btn:hover {
       background: var(--lumiverse-fill-medium, rgba(255,255,255,0.09));
       border-color: var(--lumiverse-border-strong, rgba(255,255,255,0.18));
+    }
+    @media (max-width: 560px) {
+      .sh-prompt-source-tabs { width: 100%; }
     }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the

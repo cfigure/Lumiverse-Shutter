@@ -118,11 +118,8 @@ export function createLightboxPromptLabel(deps: {
   const PROMPT_EXPANDED_MAX = 480
   const PROMPT_MOBILE_EXPANDED_MAX = 260
   const PROMPT_PILL_HEIGHT = 44
-  // The compact strip now exposes History, Prompt, and Copy directly. Let it
-  // use the available lightbox width (bounded by the viewport) rather than
-  // forcing those actions into the old Prompt/View/Copy-sized pill.
-  const PROMPT_PILL_DESKTOP_WIDTH = 520
-  const PROMPT_PILL_MOBILE_WIDTH = 520
+  // The compact strip is content-width; expanded prompt sizing still uses
+  // the image-aware desktop/mobile bounds above.
   // Seed value for the expanded reserve only — the live value is measured
   // from the panel's actual rendered height (content-aware) at expand time.
   const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE // 176
@@ -719,20 +716,30 @@ export function createLightboxPromptLabel(deps: {
       const promptMaxHeight = isExpanded ? getPromptMaxHeight(rectHeight > 0 ? rectHeight : undefined) : PROMPT_PILL_HEIGHT
       const isCompact = isCompactPromptLayout()
       const viewportMax = viewportWidthLocal - EDGE * 2
-      const pillWidth = Math.min(isCompact ? PROMPT_PILL_MOBILE_WIDTH : PROMPT_PILL_DESKTOP_WIDTH, viewportMax)
-      const width = !isExpanded
-        ? pillWidth
-        : (rect.width === 0 || rect.height === 0
-            ? (isCompact
-                ? Math.min(PROMPT_MOBILE_MAX_WIDTH, viewportMax)
-                : Math.min(PROMPT_DESKTOP_MIN_WIDTH, viewportMax))
-            : (isCompact
-                ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
-                : Math.min(
-                    Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH),
-                    PROMPT_DESKTOP_MAX_WIDTH,
-                    viewportMax,
-                  )))
+      const expandedWidth = rect.width === 0 || rect.height === 0
+        ? (isCompact
+            ? Math.min(PROMPT_MOBILE_MAX_WIDTH, viewportMax)
+            : Math.min(PROMPT_DESKTOP_MIN_WIDTH, viewportMax))
+        : (isCompact
+            ? Math.min(rectWidth, PROMPT_MOBILE_MAX_WIDTH, viewportMax)
+            : Math.min(
+                Math.max(rectWidth, PROMPT_DESKTOP_MIN_WIDTH),
+                PROMPT_DESKTOP_MAX_WIDTH,
+                viewportMax,
+              ))
+
+      // Collapsed mode is a true content-width toolbar. Write fit-content
+      // before measuring so inherited or previously-expanded widths cannot
+      // stretch it across the lightbox.
+      if (!isExpanded) {
+        setStyleIfChanged(ws, 'width', 'fit-content')
+        setStyleIfChanged(ws, 'min-width', '0px')
+        setStyleIfChanged(ws, 'max-width', `${viewportMax}px`)
+      } else {
+        setStyleIfChanged(ws, 'width', `${expandedWidth}px`)
+        setStyleIfChanged(ws, 'min-width', '0px')
+        setStyleIfChanged(ws, 'max-width', `${viewportMax}px`)
+      }
 
       if (rect.width === 0 || rect.height === 0) {
         // Native lightbox mounts the <img> before it has natural dimensions.
@@ -740,7 +747,6 @@ export function createLightboxPromptLabel(deps: {
         // a real rect, then snap it under the image.
         setStyleIfChanged(ws, 'top', 'calc(50% + 48px)')
         setStyleIfChanged(ws, 'left', '50%')
-        setStyleIfChanged(ws, 'width', `${width}px`)
         setStyleIfChanged(ws, 'transform', 'translateX(-50%)')
 
         if (labelEl) {
@@ -749,11 +755,13 @@ export function createLightboxPromptLabel(deps: {
         return
       }
 
-      const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - width) / 2, viewportWidthLocal - width - EDGE))
+      const measuredWidth = isExpanded
+        ? expandedWidth
+        : Math.min(wrapper.getBoundingClientRect().width / uiScale, viewportMax)
+      const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - measuredWidth) / 2, viewportWidthLocal - measuredWidth - EDGE))
 
       setStyleIfChanged(ws, 'top', `${rectBottom + GAP}px`)
       setStyleIfChanged(ws, 'left', `${left}px`)
-      setStyleIfChanged(ws, 'width', `${width}px`)
       setStyleIfChanged(ws, 'transform', '')
 
       if (labelEl) {
@@ -1062,7 +1070,7 @@ export function createLightboxPromptLabel(deps: {
       historyBtn.hidden = resolved.history.length === 0
       historyBtn.disabled = resolved.history.length === 0
       historyBtn.textContent = resolved.history.length > 0
-        ? `View History${resolved.history.length > 1 ? ` · ${resolved.history.length}` : ''}`
+        ? `View History · ${resolved.history.length}`
         : 'View History'
     }
     if (viewBtn) {

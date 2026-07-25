@@ -40,6 +40,15 @@ export function createModals(deps: {
 
   let promptPreviewOpen = false
 
+  type ModalHandle = {
+    root: HTMLElement
+    dismiss(): void
+    setTitle(title: string): void
+    onDismiss(callback: () => void): (() => void) | void
+  }
+
+  const modalInputStack: symbol[] = []
+
   // ── Modals ──
 
   // ── Lightbox state (for cleanup) ──
@@ -71,17 +80,24 @@ export function createModals(deps: {
   // appropriate. Editable controls keep their native caret behaviour because
   // their arrow-key default is not prevented.
   function isolateModalInput(
-    modal: { root: HTMLElement; dismiss(): void; onDismiss(callback: () => void): void },
-    options: { blockArrows?: boolean } = {},
+    modal: ModalHandle,
+    options: { blockArrows?: boolean; onEscape?: () => void } = {},
   ) {
     const blockArrows = options.blockArrows !== false
+    const stackToken = Symbol('shutter-modal-input')
+    modalInputStack.push(stackToken)
+
+    const isTopModal = () => modalInputStack[modalInputStack.length - 1] === stackToken
     const keyBlocker = (e: KeyboardEvent) => {
+      if (!isTopModal()) return
+
       if (e.key === 'Escape') {
         // The preview lightbox is the foreground surface and owns Escape.
         if (activeLightbox) return
         e.preventDefault()
         e.stopImmediatePropagation()
-        modal.dismiss()
+        if (options.onEscape) options.onEscape()
+        else modal.dismiss()
         return
       }
 
@@ -109,7 +125,166 @@ export function createModals(deps: {
       modal.root.removeEventListener('touchend', touchBlocker)
       modal.root.removeEventListener('touchcancel', touchBlocker)
       window.removeEventListener('keydown', keyBlocker, { capture: true })
+      const stackIndex = modalInputStack.lastIndexOf(stackToken)
+      if (stackIndex >= 0) modalInputStack.splice(stackIndex, 1)
     })
+  }
+
+  function mountModalHeaderClose(modal: ModalHandle, onClick: () => void): void {
+    const hostBody = modal.root.parentElement
+    const hostHeader = hostBody?.previousElementSibling
+    if (!(hostHeader instanceof HTMLElement)) return
+
+    const slot = document.createElement('span')
+    slot.className = 'sh-modal-header-close-slot'
+    hostHeader.appendChild(slot)
+    const handle = ctx.components.mountCloseButton(slot, {
+      onClick,
+      size: 'sm',
+      variant: 'subtle',
+      ariaLabel: 'Close',
+    })
+    modal.onDismiss(() => handle.destroy())
+  }
+
+  function constrainImagePromptModal(modal: ModalHandle): void {
+    const hostBody = modal.root.parentElement
+    if (hostBody instanceof HTMLElement) {
+      hostBody.style.overflowY = 'hidden'
+      hostBody.style.minHeight = '0'
+      hostBody.style.display = 'flex'
+      hostBody.style.flexDirection = 'column'
+    }
+    modal.root.classList.add('sh-image-prompt-root')
+  }
+
+  function makeReadonlyPromptField(label: string, text: string, kind: 'positive' | 'negative'): HTMLElement {
+    const field = document.createElement('div')
+    field.className = `sh-prompt-field sh-image-prompt-field sh-image-prompt-field-${kind}`
+    const heading = document.createElement('div')
+    heading.className = 'sh-prompt-label'
+    heading.textContent = label
+    const block = document.createElement('div')
+    block.className = 'sh-prompt-readonly sh-image-prompt-readonly'
+    block.textContent = text
+    field.append(heading, block)
+    return field
+  }
+
+  function setCopyFeedback(button: HTMLButtonElement, view: PromptMetadataView): void {
+    navigator.clipboard.writeText(formatPromptMetadataForClipboard(view)).then(() => {
+      button.innerHTML = `${COPY_CHECK_SVG} Copied`
+      button.classList.add('sh-copied')
+      setTimeout(() => {
+        if (!button.isConnected) return
+        button.textContent = 'Copy Prompt'
+        button.classList.remove('sh-copied')
+      }, 2000)
+    }).catch(() => {
+      button.textContent = 'Failed'
+      setTimeout(() => { if (button.isConnected) button.textContent = 'Copy Prompt' }, 1200)
+    })
+  }
+
+  function renderImagePromptSurface(
+    modal: ModalHandle,
+    options: {
+      initialView: PromptMetadataView
+      shutterView?: PromptMetadataView | null
+      embeddedView?: PromptMetadataView | null
+      onClose: () => void
+      historyLabel?: string
+      onViewHistory?: () => void
+    },
+  ): void {
+    constrainImagePromptModal(modal)
+    modal.setTitle('Image Prompt')
+
+    let activeView = options.initialView
+    const body = document.createElement('div')
+    body.className = 'sh-prompt-body sh-image-prompt-body'
+
+    const sourceSlot = document.createElement('div')
+    const meta = document.createElement('div')
+    meta.className = 'sh-prompt-source-meta sh-image-prompt-meta'
+    const fields = document.createElement('div')
+    fields.className = 'sh-prompt-source-fields sh-image-prompt-fields'
+
+    const renderView = (view: PromptMetadataView) => {
+      activeView = view
+      sourceSlot.querySelectorAll<HTMLButtonElement>('.sh-prompt-source-btn').forEach(button => {
+        const selected = button.dataset.source === view.source
+        button.classList.toggle('sh-active', selected)
+        button.setAttribute('aria-selected', String(selected))
+      })
+
+      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
+      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
+      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
+      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
+      meta.textContent = details.join(' · ')
+
+      fields.replaceChildren()
+      fields.classList.toggle('sh-no-negative', !view.negativePrompt)
+      fields.appendChild(makeReadonlyPromptField('Positive Prompt', view.prompt || 'Prompt unavailable', 'positive'))
+      if (view.negativePrompt) {
+        fields.appendChild(makeReadonlyPromptField('Negative Prompt', view.negativePrompt, 'negative'))
+      }
+    }
+
+    const shutterView = options.shutterView ?? null
+    const embeddedView = options.embeddedView ?? null
+    if (shutterView && embeddedView) {
+      sourceSlot.className = 'sh-prompt-source-tabs'
+      sourceSlot.setAttribute('role', 'tablist')
+      sourceSlot.setAttribute('aria-label', 'Prompt metadata source')
+      for (const [source, label, view] of [
+        ['shutter', 'Shutter', shutterView],
+        ['embedded', 'Embedded', embeddedView],
+      ] as const) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.className = 'sh-prompt-source-btn'
+        button.dataset.source = source
+        button.textContent = label
+        button.setAttribute('role', 'tab')
+        button.addEventListener('click', () => renderView(view))
+        sourceSlot.appendChild(button)
+      }
+      body.appendChild(sourceSlot)
+    }
+
+    body.append(meta, fields)
+
+    const actions = document.createElement('div')
+    actions.className = 'sh-prompt-actions sh-image-prompt-actions'
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', options.onClose)
+    actions.appendChild(closeBtn)
+
+    if (options.onViewHistory && options.historyLabel) {
+      const historyBtn = document.createElement('button')
+      historyBtn.type = 'button'
+      historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+      historyBtn.textContent = options.historyLabel
+      historyBtn.title = 'View generation history for this message response'
+      historyBtn.addEventListener('click', options.onViewHistory)
+      actions.appendChild(historyBtn)
+    }
+
+    const copyBtn = document.createElement('button')
+    copyBtn.type = 'button'
+    copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+    copyBtn.textContent = 'Copy Prompt'
+    copyBtn.addEventListener('click', () => setCopyFeedback(copyBtn, activeView))
+    actions.appendChild(copyBtn)
+    body.appendChild(actions)
+
+    modal.root.replaceChildren(body)
+    renderView(activeView)
   }
 
   function openLightbox(src: string) {
@@ -368,17 +543,27 @@ export function createModals(deps: {
     choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
       void regenerateFromSelected()
     }))
-    choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
-      ctx.sendToBackend({
-        type: 'insert_into_message',
+    const insertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+      if (insertBtn.getAttribute('aria-busy') === 'true') return
+      insertBtn.setAttribute('aria-busy', 'true')
+      for (const button of Array.from(choices.querySelectorAll('button'))) button.disabled = true
+      void comms.insertIntoMessage({
         imageId: current().imageId,
         messageId: target.messageId,
         chatId: target.chatId,
         target,
         replace: replaceChecked,
+      }).then(result => {
+        if (!modal.root.isConnected) return
+        if (result.success) {
+          modal.dismiss()
+          return
+        }
+        insertBtn.removeAttribute('aria-busy')
+        for (const button of Array.from(choices.querySelectorAll('button'))) button.disabled = false
       })
-      modal.dismiss()
-    }))
+    })
+    choices.appendChild(insertBtn)
     container.appendChild(choices)
     modal.root.appendChild(container)
 
@@ -392,12 +577,13 @@ export function createModals(deps: {
     })
   }
 
-  let activeHistoryViewerModal: { dismiss(): void } | null = null
+  let activeHistoryViewerModal: ModalHandle | null = null
 
   function openHistoryViewer(
     records: GenerationHistoryRecord[],
     initialImageId: string,
     closeUnderlyingLightbox?: () => void,
+    closeParentPrompt?: () => void,
   ): void {
     const history = [...records].sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
     if (history.length === 0) return
@@ -407,15 +593,20 @@ export function createModals(deps: {
     if (idx < 0) idx = history.length - 1
     const current = () => history[idx]!
 
-    // Match the Image Generated modal's shell, width, preview sizing, and
-    // footer placement. History is an image-selection surface; the full
-    // prompt belongs in the focused read-only viewer opened from View Prompt.
-    const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true })
+    // This is the second and final physical modal in the widget flow. The
+    // history prompt reuses this handle by swapping its body and title, so the
+    // logical three-level flow never exceeds Spindle's two-modal limit.
+    const modal = ctx.ui.showModal({ title: 'Generation History', width: 640, persistent: true }) as ModalHandle
     activeHistoryViewerModal = modal
-    isolateModalInput(modal, { blockArrows: false })
+    let surface: 'history' | 'prompt' = 'history'
+    let committing = false
 
-    let promptModal: { dismiss(): void } | null = null
-    let historyPromptOpen = false
+    const closeCurrentSurface = () => {
+      if (surface === 'prompt') renderHistorySurface()
+      else modal.dismiss()
+    }
+    isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface })
+    mountModalHeaderClose(modal, closeCurrentSurface)
 
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
@@ -460,87 +651,37 @@ export function createModals(deps: {
     viewPromptBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     viewPromptBtn.textContent = 'View Prompt'
     viewPromptBtn.title = 'View and copy the prompt saved for this generation'
+    viewPromptBtn.addEventListener('click', () => {
+      if (committing) return
+      surface = 'prompt'
+      renderImagePromptSurface(modal, {
+        initialView: promptViewFromRecord(current()),
+        onClose: renderHistorySurface,
+      })
+    })
 
-    const makeReadonlyField = (label: string, text: string, short = false) => {
-      const field = document.createElement('div')
-      field.className = 'sh-prompt-field'
-      const heading = document.createElement('div')
-      heading.className = 'sh-prompt-label'
-      heading.textContent = label
-      const block = document.createElement('div')
-      block.className = short ? 'sh-prompt-readonly sh-prompt-readonly-short' : 'sh-prompt-readonly'
-      block.textContent = text
-      field.append(heading, block)
-      return field
+    const replaceBtn = document.createElement('button')
+    replaceBtn.type = 'button'
+    replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
+    replaceBtn.textContent = 'Replace'
+    replaceBtn.title = 'Replace the image that opened Generation History'
+
+    const insertBtn = document.createElement('button')
+    insertBtn.type = 'button'
+    insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'
+    insertBtn.textContent = 'Insert'
+    insertBtn.title = 'Insert this image into its original message response'
+
+    const setCommitDisabled = (disabled: boolean) => {
+      committing = disabled
+      for (const button of [closeBtn, viewPromptBtn, replaceBtn, insertBtn, prev, next]) button.disabled = disabled
     }
 
-    const openSelectedPrompt = () => {
-      if (historyPromptOpen) return
-      historyPromptOpen = true
-      viewPromptBtn.disabled = true
-      const view = promptViewFromRecord(current())
-      const viewer = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true })
-      promptModal = viewer
-      isolateModalInput(viewer)
-
-      const body = document.createElement('div')
-      body.className = 'sh-prompt-body'
-      const subtitle = document.createElement('p')
-      subtitle.className = 'sh-prompt-subtitle'
-      subtitle.textContent = 'The exact prompt saved by Shutter for this generation.'
-      body.appendChild(subtitle)
-
-      const meta = document.createElement('div')
-      meta.className = 'sh-prompt-source-meta'
-      const metaParts = ['Saved by Shutter']
-      if (view.createdAt) metaParts.push(new Date(view.createdAt).toLocaleString())
-      if (view.promptMode) metaParts.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
-      if (view.origin) metaParts.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
-      meta.textContent = metaParts.join(' · ')
-      body.appendChild(meta)
-      body.appendChild(makeReadonlyField('Prompt', view.prompt || 'Prompt unavailable'))
-      if (view.negativePrompt) body.appendChild(makeReadonlyField('Negative Prompt', view.negativePrompt, true))
-
-      const promptActions = document.createElement('div')
-      promptActions.className = 'sh-prompt-actions'
-      const promptCloseBtn = document.createElement('button')
-      promptCloseBtn.type = 'button'
-      promptCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-      promptCloseBtn.textContent = 'Close'
-      promptCloseBtn.addEventListener('click', () => viewer.dismiss())
-      const copyBtn = document.createElement('button')
-      copyBtn.type = 'button'
-      copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-      copyBtn.textContent = 'Copy Prompt'
-      copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(formatPromptMetadataForClipboard(view)).then(() => {
-          copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
-          copyBtn.classList.add('sh-copied')
-          setTimeout(() => {
-            if (!copyBtn.isConnected) return
-            copyBtn.textContent = 'Copy Prompt'
-            copyBtn.classList.remove('sh-copied')
-          }, 2000)
-        }).catch(() => {
-          copyBtn.textContent = 'Failed'
-          setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
-        })
-      })
-      promptActions.append(promptCloseBtn, copyBtn)
-      body.appendChild(promptActions)
-      viewer.root.appendChild(body)
-      viewer.onDismiss(() => {
-        historyPromptOpen = false
-        promptModal = null
-        if (viewPromptBtn.isConnected) viewPromptBtn.disabled = false
-      })
-    }
-    viewPromptBtn.addEventListener('click', openSelectedPrompt)
-
-    const commitSelected = (replace: boolean) => {
+    const commitSelected = async (replace: boolean) => {
+      if (committing) return
+      setCommitDisabled(true)
       const entry = current()
-      ctx.sendToBackend({
-        type: 'insert_into_message',
+      const result = await comms.insertIntoMessage({
         imageId: entry.imageId,
         messageId: entry.target.messageId,
         chatId: entry.target.chatId,
@@ -550,34 +691,29 @@ export function createModals(deps: {
         // exact tag, not whichever Shutter image happens to be last now.
         replaceImageId: replace ? initialImageId : undefined,
       })
+      if (!modal.root.isConnected) return
+      if (!result.success) {
+        setCommitDisabled(false)
+        render()
+        return
+      }
+
       modal.dismiss()
+      closeParentPrompt?.()
       closeUnderlyingLightbox?.()
     }
-
-    const replaceBtn = document.createElement('button')
-    replaceBtn.type = 'button'
-    replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-    replaceBtn.textContent = 'Replace'
-    replaceBtn.title = 'Replace the image that opened Generation History'
-    replaceBtn.addEventListener('click', () => commitSelected(true))
-
-    const insertBtn = document.createElement('button')
-    insertBtn.type = 'button'
-    insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'
-    insertBtn.textContent = 'Insert'
-    insertBtn.title = 'Insert this image into its original message response'
-    insertBtn.addEventListener('click', () => commitSelected(false))
+    replaceBtn.addEventListener('click', () => { void commitSelected(true) })
+    insertBtn.addEventListener('click', () => { void commitSelected(false) })
 
     actions.append(closeBtn, viewPromptBtn, replaceBtn, insertBtn)
     container.appendChild(actions)
-    modal.root.appendChild(container)
 
     function render(): void {
       const entry = current()
       preview.src = imageUrlForHistoryRecord(entry)
       count.textContent = `${idx + 1} / ${history.length}`
-      prev.disabled = idx === 0
-      next.disabled = idx === history.length - 1
+      prev.disabled = committing || idx === 0
+      next.disabled = committing || idx === history.length - 1
       const metaParts = [new Date(entry.createdAt).toLocaleString()]
       if (entry.promptMode) metaParts.push(`Mode: ${humanisePromptMode(entry.promptMode)}`)
       if (entry.origin) metaParts.push(`Action: ${humaniseGenerationOrigin(entry.origin)}`)
@@ -588,7 +724,23 @@ export function createModals(deps: {
       }
     }
 
+    function renderHistorySurface(): void {
+      surface = 'history'
+      modal.setTitle('Generation History')
+      modal.root.classList.remove('sh-image-prompt-root')
+      const hostBody = modal.root.parentElement
+      if (hostBody instanceof HTMLElement) {
+        hostBody.style.overflowY = 'auto'
+        hostBody.style.display = ''
+        hostBody.style.flexDirection = ''
+        hostBody.style.minHeight = ''
+      }
+      modal.root.replaceChildren(container)
+      render()
+    }
+
     const step = (direction: -1 | 1) => {
+      if (surface !== 'history' || committing) return
       const nextIndex = idx + direction
       if (nextIndex < 0 || nextIndex >= history.length) return
       idx = nextIndex
@@ -597,8 +749,9 @@ export function createModals(deps: {
     prev.addEventListener('click', event => { event.stopPropagation(); step(-1) })
     next.addEventListener('click', event => { event.stopPropagation(); step(1) })
     const arrowHandler = (event: KeyboardEvent) => {
+      if (surface !== 'history') return
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-      if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || historyPromptOpen || isEditableTarget(event.target)) return
+      if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target)) return
       event.preventDefault()
       event.stopImmediatePropagation()
       step(event.key === 'ArrowLeft' ? -1 : 1)
@@ -614,7 +767,7 @@ export function createModals(deps: {
       touchStartY = touch.clientY
     }, { passive: true })
     previewWrap.addEventListener('touchend', event => {
-      if (historyPromptOpen) return
+      if (surface !== 'history') return
       const touch = event.changedTouches[0]
       if (!touch) return
       const dx = touch.clientX - touchStartX
@@ -622,10 +775,9 @@ export function createModals(deps: {
       if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1)
     }, { passive: true })
 
-    render()
+    renderHistorySurface()
     modal.onDismiss(() => {
       if (activeHistoryViewerModal === modal) activeHistoryViewerModal = null
-      promptModal?.dismiss()
       dismissLightbox()
       window.removeEventListener('keydown', arrowHandler, { capture: true })
     })
@@ -651,125 +803,49 @@ export function createModals(deps: {
   // provider-embedded metadata independently, then shows one source at a time.
 
   let promptViewerOpen = false
-  let activePromptViewerModal: { dismiss(): void } | null = null
+  let activePromptViewerModal: ModalHandle | null = null
 
   function viewLastPrompt(): void {
     const chatId = ctx.getActiveChat()?.chatId ?? undefined
     if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 
-    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 })
+    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true }) as ModalHandle
     activePromptViewerModal = modal
-    isolateModalInput(modal)
     let dismissed = false
-    let activeView: PromptMetadataView | null = null
+    const closePrompt = () => modal.dismiss()
+    isolateModalInput(modal, { onEscape: closePrompt })
+    mountModalHeaderClose(modal, closePrompt)
+    constrainImagePromptModal(modal)
 
-    const container = document.createElement('div')
-    container.className = 'sh-prompt-body'
-    const subtitle = document.createElement('p')
-    subtitle.className = 'sh-prompt-subtitle'
-    subtitle.textContent = 'Reading saved and embedded prompt metadata.'
-    container.appendChild(subtitle)
-
+    const loadingBody = document.createElement('div')
+    loadingBody.className = 'sh-prompt-body sh-image-prompt-body sh-image-prompt-loading-body'
     const status = document.createElement('div')
     status.className = 'sh-prompt-viewer-status'
     const spinnerSlot = document.createElement('span')
     const statusText = document.createElement('span')
     statusText.textContent = 'Reading prompt…'
-    status.appendChild(spinnerSlot)
-    status.appendChild(statusText)
-    container.appendChild(status)
+    status.append(spinnerSlot, statusText)
+    const loadingActions = document.createElement('div')
+    loadingActions.className = 'sh-prompt-actions sh-image-prompt-actions'
+    const loadingCloseBtn = document.createElement('button')
+    loadingCloseBtn.type = 'button'
+    loadingCloseBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
+    loadingCloseBtn.textContent = 'Close'
+    loadingCloseBtn.addEventListener('click', closePrompt)
+    loadingActions.appendChild(loadingCloseBtn)
+    loadingBody.append(status, loadingActions)
+    modal.root.replaceChildren(loadingBody)
+
     let spinnerHandle: { destroy(): void } | null = ctx.components.mountSpinner(spinnerSlot, { size: 14, fast: true })
     const destroySpinner = () => { spinnerHandle?.destroy(); spinnerHandle = null }
 
-    const sourceSlot = document.createElement('div')
-    const fieldsSlot = document.createElement('div')
-    fieldsSlot.className = 'sh-prompt-source-fields'
-    const actions = document.createElement('div')
-    actions.className = 'sh-prompt-actions'
-    const copyBtn = document.createElement('button')
-    copyBtn.type = 'button'
-    copyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-    copyBtn.textContent = 'Copy Prompt'
-    copyBtn.hidden = true
-    copyBtn.addEventListener('click', () => {
-      if (!activeView) return
-      navigator.clipboard.writeText(formatPromptMetadataForClipboard(activeView)).then(() => {
-        copyBtn.innerHTML = `${COPY_CHECK_SVG} Copied`
-        copyBtn.classList.add('sh-copied')
-        setTimeout(() => {
-          if (!copyBtn.isConnected) return
-          copyBtn.textContent = 'Copy Prompt'
-          copyBtn.classList.remove('sh-copied')
-        }, 2000)
-      }).catch(() => {
-        copyBtn.textContent = 'Failed'
-        setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = 'Copy Prompt' }, 1200)
-      })
-    })
-    const closeBtn = document.createElement('button')
-    closeBtn.type = 'button'
-    closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-    closeBtn.textContent = 'Close'
-    closeBtn.addEventListener('click', () => modal.dismiss())
-    const historyBtn = document.createElement('button')
-    historyBtn.type = 'button'
-    historyBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-    historyBtn.textContent = 'View History'
-    historyBtn.title = 'View generation history for this message response'
-    historyBtn.hidden = true
-    // Follow Shutter's existing modal action pattern: content first, then a
-    // compact footer row. History is an action, not part of the scrollable
-    // prompt metadata body.
-    actions.append(closeBtn, historyBtn, copyBtn)
-
-    container.appendChild(sourceSlot)
-    container.appendChild(fieldsSlot)
-    container.appendChild(actions)
-    modal.root.appendChild(container)
     modal.onDismiss(() => {
       dismissed = true
       destroySpinner()
       promptViewerOpen = false
       if (activePromptViewerModal === modal) activePromptViewerModal = null
     })
-
-    const makeField = (label: string, text: string, short = false) => {
-      const field = document.createElement('div')
-      field.className = 'sh-prompt-field'
-      const heading = document.createElement('div')
-      heading.className = 'sh-prompt-label'
-      heading.textContent = label
-      const block = document.createElement('div')
-      block.className = short ? 'sh-prompt-readonly sh-prompt-readonly-short' : 'sh-prompt-readonly'
-      block.textContent = text
-      field.appendChild(heading)
-      field.appendChild(block)
-      return field
-    }
-
-    function renderSource(view: PromptMetadataView) {
-      activeView = view
-      sourceSlot.querySelectorAll<HTMLButtonElement>('.sh-prompt-source-btn').forEach(button => {
-        button.classList.toggle('sh-active', button.dataset.source === view.source)
-        button.setAttribute('aria-selected', String(button.dataset.source === view.source))
-      })
-      subtitle.textContent = view.source === 'shutter'
-        ? 'The exact prompt saved by Shutter when this image was generated.'
-        : 'Prompt data read from metadata embedded in the image.'
-      fieldsSlot.innerHTML = ''
-      const meta = document.createElement('div')
-      meta.className = 'sh-prompt-source-meta'
-      const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
-      if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
-      if (view.promptMode) details.push(`Mode: ${humanisePromptMode(view.promptMode)}`)
-      if (view.origin) details.push(`Action: ${humaniseGenerationOrigin(view.origin)}`)
-      meta.textContent = details.join(' · ')
-      fieldsSlot.appendChild(meta)
-      fieldsSlot.appendChild(makeField('Prompt', view.prompt))
-      if (view.negativePrompt) fieldsSlot.appendChild(makeField('Negative Prompt', view.negativePrompt, true))
-      copyBtn.hidden = false
-    }
 
     void (async () => {
       const tag = await comms.resolveShutterTag(chatId, '__last__', -1)
@@ -787,41 +863,25 @@ export function createModals(deps: {
       const history = record ? await comms.getGenerationHistory(record.target) : []
       if (dismissed) return
       destroySpinner()
-      status.remove()
-
-      if (history.length > 0) {
-        historyBtn.hidden = false
-        historyBtn.textContent = `View History · ${history.length}`
-        historyBtn.addEventListener('click', () => {
-          modal.dismiss()
-          openHistoryViewer(history, tag.imageId)
-        }, { once: true })
-      }
 
       const shutterView = record ? promptViewFromRecord(record) : null
       const embeddedView = embedded ? promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt) : null
-      if (!shutterView && !embeddedView) {
-        subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.'
+      const initialView = shutterView ?? embeddedView
+      if (!initialView) {
+        statusText.textContent = 'No saved or embedded prompt metadata is available for this image.'
         return
       }
 
-      if (shutterView && embeddedView) {
-        sourceSlot.className = 'sh-prompt-source-tabs'
-        for (const [source, label] of [['shutter', 'Shutter'], ['embedded', 'Embedded']] as const) {
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.className = 'sh-prompt-source-btn'
-          button.dataset.source = source
-          button.textContent = label
-          button.setAttribute('role', 'tab')
-          button.addEventListener('click', () => renderSource(source === 'shutter' ? shutterView : embeddedView))
-          sourceSlot.appendChild(button)
-        }
-      } else {
-        sourceSlot.remove()
-      }
-
-      renderSource(shutterView ?? embeddedView!)
+      renderImagePromptSurface(modal, {
+        initialView,
+        shutterView,
+        embeddedView,
+        onClose: closePrompt,
+        historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
+        onViewHistory: history.length > 0
+          ? () => openHistoryViewer(history, tag.imageId, undefined, closePrompt)
+          : undefined,
+      })
     })()
   }
 

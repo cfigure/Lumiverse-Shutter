@@ -13,7 +13,7 @@ import {
 type FrontendMessage =
   | { type: 'request_settings' }
   | { type: 'update_settings'; settings: Partial<Settings> }
-  | { type: 'insert_into_message'; imageId: string; messageId: string; chatId: string; target?: GenerationTarget; replace?: boolean; replaceImageId?: string }
+  | { type: 'insert_into_message'; requestId?: string; imageId: string; messageId: string; chatId: string; target?: GenerationTarget; replace?: boolean; replaceImageId?: string }
   | { type: 'resolve_generation_target'; requestId: string; chatId: string; messageId: string }
   | { type: 'append_generation_history'; requestId: string; target: GenerationTarget; entry: GenerationHistoryInput }
   | { type: 'get_generation_history'; requestId: string; target: GenerationTarget }
@@ -475,62 +475,88 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
       }
 
       case 'insert_into_message': {
+        const reply = (success: boolean, changed: boolean, error?: string) => {
+          if (!payload.requestId) return
+          spindle.sendToFrontend({
+            type: 'insert_result',
+            requestId: payload.requestId,
+            success,
+            changed,
+            error,
+          }, userId)
+        }
+        const fail = (message: string, level: 'warning' | 'error' = 'error') => {
+          spindle.toast[level](message, { userId })
+          reply(false, false, message)
+        }
+
         if (!spindle.permissions.has('chat_mutation')) {
-          spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId })
-          return
+          fail('Grant the "Chat Mutation" permission to insert images into messages.', 'warning')
+          break
         }
 
-        const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
-        const requestedId = payload.target?.messageId ?? payload.messageId
-        const { target: message, error } = resolveTarget(messages, requestedId)
-        if (!message) { spindle.toast.error(error || 'Message not found.', { userId }); return }
-
-        const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id
-        if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
-          spindle.toast.error('The message response used for this generation no longer exists.', { userId })
-          return
-        }
-
-        const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
-        let baseContent = message.swipes[swipeIndex] ?? message.content
-        let didReplace = false
-
-        if (payload.replace) {
-          const stripped = payload.replaceImageId
-            ? stripShutterImageById(baseContent, payload.replaceImageId)
-            : stripLastShutterImage(baseContent)
-          if (payload.replaceImageId && !stripped.found) {
-            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId })
-            return
+        try {
+          const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
+          const requestedId = payload.target?.messageId ?? payload.messageId
+          const { target: message, error } = resolveTarget(messages, requestedId)
+          if (!message) {
+            fail(error || 'Message not found.')
+            break
           }
-          baseContent = stripped.content
-          didReplace = stripped.found
-        }
 
-        // A selected history image may already exist elsewhere in the same
-        // response. In replace mode, removing the exact source image is still
-        // the requested mutation, so avoid adding a duplicate. In insert mode,
-        // retain the existing no-op behaviour.
-        if (containsShutterImageId(baseContent, payload.imageId)) {
-          if (!didReplace) {
-            spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
-            return
+          const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id
+          if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
+            fail('The message response used for this generation no longer exists.')
+            break
           }
-        } else {
-          baseContent += `\n\n![shutter](${imageUrl})`
-        }
 
-        const swipes = [...message.swipes]
-        swipes[swipeIndex] = baseContent
-        await spindle.chat.updateMessage(payload.chatId, message.id, {
-          swipes,
-          swipe_dates: [...message.swipe_dates],
-          swipe_id: message.swipe_id,
-        })
+          const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`
+          let baseContent = message.swipes[swipeIndex] ?? message.content
+          let didReplace = false
 
-        const settings = await loadSettings(userId)
-        if (settings.toastOnInsert) {
-          spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId })
+          if (payload.replace) {
+            const stripped = payload.replaceImageId
+              ? stripShutterImageById(baseContent, payload.replaceImageId)
+              : stripLastShutterImage(baseContent)
+            if (payload.replaceImageId && !stripped.found) {
+              fail('The image selected for replacement is no longer in that message response.')
+              break
+            }
+            baseContent = stripped.content
+            didReplace = stripped.found
+          }
+
+          // A selected history image may already exist elsewhere in the same
+          // response. In replace mode, removing the exact source image is still
+          // the requested mutation, so avoid adding a duplicate. In insert mode,
+          // retain the existing no-op behaviour.
+          if (containsShutterImageId(baseContent, payload.imageId)) {
+            if (!didReplace) {
+              spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
+              reply(true, false)
+              break
+            }
+          } else {
+            baseContent += `\n\n![shutter](${imageUrl})`
+          }
+
+          const swipes = [...message.swipes]
+          swipes[swipeIndex] = baseContent
+          await spindle.chat.updateMessage(payload.chatId, message.id, {
+            swipes,
+            swipe_dates: [...message.swipe_dates],
+            swipe_id: message.swipe_id,
+          })
+
+          const settings = await loadSettings(userId)
+          if (settings.toastOnInsert) {
+            spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId })
+          }
+          reply(true, true)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          spindle.log.error(`[insert_into_message] ${message}`)
+          fail('Could not update the message response.')
         }
         break
       }

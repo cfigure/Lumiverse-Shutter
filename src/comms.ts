@@ -12,7 +12,7 @@ import type {
 export type Comms = ReturnType<typeof createComms>
 
 type PendingRequest = {
-  kind: 'target' | 'tag' | 'history' | 'record' | 'clear'
+  kind: 'target' | 'tag' | 'history' | 'record' | 'clear' | 'insert'
   resolve: (value: any) => void
   timeout: ReturnType<typeof setTimeout>
 }
@@ -65,6 +65,17 @@ export function createComms(ctx: SpindleFrontendContext) {
     return request('clear', 'clear_generation_history', {}, false, 15000)
   }
 
+  function insertIntoMessage(payload: {
+    imageId: string
+    messageId: string
+    chatId: string
+    target?: GenerationTarget
+    replace?: boolean
+    replaceImageId?: string
+  }): Promise<{ success: boolean; changed: boolean }> {
+    return request('insert', 'insert_into_message', payload, { success: false, changed: false }, 15000)
+  }
+
   // Returns true when the payload was a comms round-trip reply (consumed).
   function handleBackendMessage(payload: any): boolean {
     if (!payload || typeof payload.requestId !== 'string') return false
@@ -77,6 +88,7 @@ export function createComms(ctx: SpindleFrontendContext) {
       || (payload.type === 'generation_history' && entry.kind === 'history')
       || (payload.type === 'generation_record' && entry.kind === 'record')
       || (payload.type === 'history_cleared' && entry.kind === 'clear')
+      || (payload.type === 'insert_result' && entry.kind === 'insert')
     if (!matches) return false
 
     clearTimeout(entry.timeout)
@@ -90,6 +102,8 @@ export function createComms(ctx: SpindleFrontendContext) {
       entry.resolve(Array.isArray(payload.history) ? payload.history : [])
     } else if (payload.type === 'generation_record') {
       entry.resolve(payload.record ?? null)
+    } else if (payload.type === 'insert_result') {
+      entry.resolve({ success: payload.success === true, changed: payload.changed === true })
     } else {
       entry.resolve(true)
     }
@@ -101,6 +115,7 @@ export function createComms(ctx: SpindleFrontendContext) {
       clearTimeout(entry.timeout)
       if (entry.kind === 'history') entry.resolve([])
       else if (entry.kind === 'clear') entry.resolve(false)
+      else if (entry.kind === 'insert') entry.resolve({ success: false, changed: false })
       else entry.resolve(null)
       pending.delete(requestId)
     }
@@ -113,6 +128,7 @@ export function createComms(ctx: SpindleFrontendContext) {
     getGenerationHistory,
     getGenerationRecord,
     clearGenerationHistory,
+    insertIntoMessage,
     handleBackendMessage,
     dispose,
   }

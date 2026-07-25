@@ -184,42 +184,45 @@ export const SHUTTER_CSS = `
       padding: 8px 0;
     }
 
-    /* One-source-at-a-time prompt metadata selector. In the compact native
-       lightbox toolbar this content is hidden with the rest of the prompt
-       body. The expanded control is deliberately compact: it chooses a
-       source, but should not visually compete with the prompt itself. */
+    /* Compact source controls shared by the modal and expanded lightbox. */
     .sh-prompt-source-tabs {
-      display: inline-grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      display: inline-flex;
+      align-items: center;
       align-self: flex-start;
-      width: min(100%, 320px);
-      gap: 2px;
-      padding: 2px;
-      margin-bottom: 8px;
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 7px);
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.04));
+      width: fit-content;
+      max-width: 100%;
+      gap: 6px;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
     .sh-prompt-source-btn {
+      flex: 0 0 auto;
       min-width: 0;
       min-height: 28px;
-      padding: 4px 12px;
-      border: 0;
-      border-radius: 5px;
-      background: transparent;
+      padding: 4px 10px;
+      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+      border-radius: var(--lcs-radius-sm, 6px);
+      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       color: var(--lumiverse-text-muted, #999);
       font: inherit;
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
       line-height: 1.2;
       cursor: pointer;
-      transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
     }
-    .sh-prompt-source-btn:hover { color: var(--lumiverse-text, #eee); }
+    .sh-prompt-source-btn:hover {
+      color: var(--lumiverse-text, #eee);
+      border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
+    }
     .sh-prompt-source-btn.sh-active {
       background: var(--lumiverse-fill-heavy, rgba(255,255,255,0.1));
+      border-color: var(--lumiverse-primary-020, rgba(147,112,219,0.2));
       color: var(--lumiverse-text, #eee);
-      box-shadow: 0 1px 2px rgba(0,0,0,0.16);
     }
     .sh-prompt-source-meta {
       margin-bottom: 8px;
@@ -228,9 +231,63 @@ export const SHUTTER_CSS = `
       line-height: 1.4;
     }
     .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
-    @media (max-width: 560px) {
-      .sh-prompt-source-tabs { width: 100%; }
+
+    /* Image Prompt uses the host modal shell, but constrains the extension
+       body so only the prompt boxes scroll. Header and footer stay visible. */
+    .sh-image-prompt-root {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      width: 100%;
+      min-height: 0;
     }
+    .sh-image-prompt-body {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+      height: min(420px, calc(var(--app-scaled-viewport-height, 100dvh) - 132px));
+      max-height: 100%;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .sh-image-prompt-meta {
+      flex: 0 0 auto;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .sh-image-prompt-fields {
+      display: grid;
+      flex: 1 1 auto;
+      grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
+      min-height: 0;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .sh-image-prompt-fields.sh-no-negative {
+      display: flex;
+    }
+    .sh-image-prompt-field {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .sh-image-prompt-field-positive { flex: 1 1 auto; }
+    .sh-image-prompt-readonly {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+      max-height: none;
+    }
+    .sh-image-prompt-actions {
+      flex: 0 0 auto;
+      margin-top: auto;
+    }
+    .sh-image-prompt-loading-body .sh-prompt-viewer-status {
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: center;
+    }
+    .sh-modal-header-close-slot { display: inline-flex; align-items: center; }
 
     /* ── Lightbox prompt label (injected at BODY level, not into the
        portal) ── The wrapper is fixed-positioned via JS and deliberately
@@ -239,6 +296,9 @@ export const SHUTTER_CSS = `
        Chromium re-capture the blur (intermittent unblurred-frame flash).
        See the injection site in decorateLightbox. */
     .sh-lightbox-prompt {
+      width: fit-content;
+      min-width: 0;
+      max-width: calc(var(--app-scaled-viewport-width, 100vw) - 24px);
       max-height: 156px;
       overflow: hidden;
       display: flex;
@@ -374,9 +434,11 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt-actions {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       margin-left: auto;
       flex: 0 0 auto;
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
     .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
       margin-left: 0;
@@ -409,24 +471,31 @@ export const SHUTTER_CSS = `
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
     .sh-lightbox-prompt.sh-pill {
+      width: fit-content;
+      min-width: 0;
       height: var(--sh-prompt-pill-height, 44px);
       max-height: var(--sh-prompt-pill-height, 44px);
       min-height: var(--sh-prompt-pill-height, 44px);
-      padding: 8px 12px;
+      padding: 7px 9px;
       justify-content: center;
+      white-space: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-heading {
-      width: 100%;
+      width: auto;
+      min-width: 0;
       padding-bottom: 0;
       margin-bottom: 0;
       border-bottom: 0;
-      gap: 10px;
+      gap: 6px;
+      flex-wrap: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
-      width: 100%;
+      width: auto;
+      min-width: 0;
       justify-content: flex-end;
-      gap: 6px;
+      gap: 5px;
       margin-left: 0;
+      flex-wrap: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
@@ -442,9 +511,11 @@ export const SHUTTER_CSS = `
       display: none !important;
     }
     .sh-lightbox-prompt.sh-expanded {
+      width: 100%;
       height: auto;
       min-height: 0;
     }
+    .sh-lightbox-prompt-content .sh-prompt-source-tabs { margin-bottom: 8px; }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;
     }

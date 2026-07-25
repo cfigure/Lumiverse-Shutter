@@ -4783,7 +4783,12 @@ exports.SHUTTER_CSS = `
     .sh-lightbox-prompt-close-slot {
       display: inline-flex;
       align-items: center;
-      margin-left: 8px;
+      justify-content: center;
+      flex: 0 0 26px;
+      width: 26px;
+      min-width: 26px;
+      height: 26px;
+      margin-left: 2px;
     }
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }

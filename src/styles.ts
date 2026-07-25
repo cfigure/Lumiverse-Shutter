@@ -65,13 +65,17 @@ export const SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
+    .sh-history-body { gap: 10px; }
+    .sh-history-body .sh-preview img { max-height: min(36vh, 360px); }
     .sh-history-summary {
       min-width: 0;
+      padding: 0 2px 2px;
       color: var(--lumiverse-text-muted, #999);
-      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
+    .sh-history-actions { margin-top: 2px; }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
@@ -240,10 +244,16 @@ export const SHUTTER_CSS = `
        host body is made non-scrolling in code; only these read-only prompt
        boxes scroll internally, leaving the standard footer visible. */
     .sh-image-prompt-root { width: 100%; min-height: 0; }
-    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 12px; }
-    .sh-image-prompt-meta { margin: 0; overflow-wrap: anywhere; }
-    .sh-image-prompt-fields { min-height: 0; overflow: hidden; }
-    .sh-image-prompt-readonly { box-sizing: border-box; }
+    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-meta {
+      margin: -2px 0 0;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .sh-image-prompt-fields { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-readonly { box-sizing: border-box; cursor: text; }
     .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
     .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
     .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }
@@ -339,7 +349,6 @@ export const SHUTTER_CSS = `
       gap: 4px;
       white-space: nowrap;
       flex-shrink: 0;
-      min-width: 6.25em;
       justify-content: center;
       margin-left: auto;
       padding: 2px 8px;
@@ -438,7 +447,7 @@ export const SHUTTER_CSS = `
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
     .sh-lightbox-prompt.sh-pill {
-      width: fit-content;
+      width: 100%;
       min-width: 0;
       height: var(--sh-prompt-pill-height, 44px);
       max-height: var(--sh-prompt-pill-height, 44px);
@@ -448,8 +457,9 @@ export const SHUTTER_CSS = `
       white-space: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-heading {
-      width: auto;
+      width: 100%;
       min-width: 0;
+      justify-content: center;
       padding-bottom: 0;
       margin-bottom: 0;
       border-bottom: 0;
@@ -459,7 +469,7 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
       width: auto;
       min-width: 0;
-      justify-content: flex-end;
+      justify-content: center;
       gap: 5px;
       margin-left: 0;
       flex-wrap: nowrap;

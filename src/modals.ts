@@ -575,7 +575,7 @@ export function createModals(deps: {
     isolateModalInput(modal, { blockArrows: false, onEscape: closeCurrentSurface })
 
     const container = document.createElement('div')
-    container.className = 'sh-modal-body'
+    container.className = 'sh-modal-body sh-history-body'
     const previewWrap = document.createElement('div')
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')

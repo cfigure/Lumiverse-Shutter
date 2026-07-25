@@ -117,8 +117,8 @@ export function createLightboxPromptLabel(deps: {
   const PROMPT_EXPANDED_MAX = 480
   const PROMPT_MOBILE_EXPANDED_MAX = 260
   const PROMPT_PILL_HEIGHT = 44
-  // The compact strip is content-width; expanded prompt sizing remains
-  // image-aware using the desktop/mobile bounds above.
+  const PROMPT_PILL_DESKTOP_WIDTH = 360
+  const PROMPT_PILL_MOBILE_WIDTH = 320
   // Seed value for the expanded reserve only — the live value is measured
   // from the panel's actual rendered height (content-aware) at expand time.
   const CAPTION_RESERVE = PROMPT_MAX_HEIGHT + CAPTION_GAP + CAPTION_EDGE // 176
@@ -724,18 +724,17 @@ export function createLightboxPromptLabel(deps: {
                 viewportMax,
               ))
 
-      // Collapsed mode is a true content-width toolbar. Write fit-content
-      // before measuring so a prior expanded width or inherited minimum
-      // cannot stretch it across the lightbox.
-      if (!isExpanded) {
-        setStyleIfChanged(ws, 'width', 'fit-content')
-        setStyleIfChanged(ws, 'min-width', '0px')
-        setStyleIfChanged(ws, 'max-width', `${viewportMax}px`)
-      } else {
-        setStyleIfChanged(ws, 'width', `${expandedWidth}px`)
-        setStyleIfChanged(ws, 'min-width', '0px')
-        setStyleIfChanged(ws, 'max-width', `${viewportMax}px`)
-      }
+      // Restore the stable 1.0.6 collapsed width so different action
+      // combinations and the temporary Copied state never resize the bar.
+      // Expanded prompt sizing remains image-aware.
+      const collapsedWidth = Math.min(
+        isCompact ? PROMPT_PILL_MOBILE_WIDTH : PROMPT_PILL_DESKTOP_WIDTH,
+        viewportMax,
+      )
+      const toolbarWidth = isExpanded ? expandedWidth : collapsedWidth
+      setStyleIfChanged(ws, 'width', `${toolbarWidth}px`)
+      setStyleIfChanged(ws, 'min-width', '0px')
+      setStyleIfChanged(ws, 'max-width', `${viewportMax}px`)
 
       if (rect.width === 0 || rect.height === 0) {
         // Native lightbox mounts the <img> before it has natural dimensions.
@@ -751,9 +750,7 @@ export function createLightboxPromptLabel(deps: {
         return
       }
 
-      const measuredWidth = isExpanded
-        ? expandedWidth
-        : Math.min(wrapper.getBoundingClientRect().width / uiScale, viewportMax)
+      const measuredWidth = toolbarWidth
       const left = Math.max(EDGE, Math.min(rectLeft + (rectWidth - measuredWidth) / 2, viewportWidthLocal - measuredWidth - EDGE))
 
       setStyleIfChanged(ws, 'top', `${rectBottom + GAP}px`)

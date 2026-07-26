@@ -330,6 +330,7 @@ export const SHUTTER_CSS = `
       border-bottom: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       display: flex;
       align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
     }
     .sh-lightbox-prompt-scroll {
@@ -411,7 +412,7 @@ export const SHUTTER_CSS = `
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      margin-left: auto;
+      margin-left: 0;
       flex: 0 0 auto;
       flex-wrap: nowrap;
       white-space: nowrap;

@@ -72,8 +72,12 @@ export function createComms(ctx: SpindleFrontendContext) {
     target?: GenerationTarget
     replace?: boolean
     replaceImageId?: string
-  }): Promise<{ success: boolean; changed: boolean }> {
-    return request('insert', 'insert_into_message', payload, { success: false, changed: false }, 15000)
+  }): Promise<{
+    success: boolean
+    changed: boolean
+    reason?: 'duplicate' | 'same_image' | 'target_missing' | 'permission' | 'failed'
+  }> {
+    return request('insert', 'insert_into_message', payload, { success: false, changed: false, reason: 'failed' }, 15000)
   }
 
   // Returns true when the payload was a comms round-trip reply (consumed).
@@ -103,7 +107,7 @@ export function createComms(ctx: SpindleFrontendContext) {
     } else if (payload.type === 'generation_record') {
       entry.resolve(payload.record ?? null)
     } else if (payload.type === 'insert_result') {
-      entry.resolve({ success: payload.success === true, changed: payload.changed === true })
+      entry.resolve({ success: payload.success === true, changed: payload.changed === true, reason: payload.reason })
     } else {
       entry.resolve(true)
     }
@@ -115,7 +119,7 @@ export function createComms(ctx: SpindleFrontendContext) {
       clearTimeout(entry.timeout)
       if (entry.kind === 'history') entry.resolve([])
       else if (entry.kind === 'clear') entry.resolve(false)
-      else if (entry.kind === 'insert') entry.resolve({ success: false, changed: false })
+      else if (entry.kind === 'insert') entry.resolve({ success: false, changed: false, reason: 'failed' })
       else entry.resolve(null)
       pending.delete(requestId)
     }

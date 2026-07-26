@@ -381,7 +381,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
                 break;
             }
             case 'insert_into_message': {
-                const reply = (success, changed) => {
+                const reply = (success, changed, reason) => {
                     if (!payload.requestId)
                         return;
                     spindle.sendToFrontend({
@@ -389,11 +389,12 @@ spindle.onFrontendMessage(async (raw, userId) => {
                         requestId: payload.requestId,
                         success,
                         changed,
+                        reason,
                     }, userId);
                 };
                 if (!spindle.permissions.has('chat_mutation')) {
                     spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId });
-                    reply(false, false);
+                    reply(false, false, 'permission');
                     break;
                 }
                 try {
@@ -402,44 +403,56 @@ spindle.onFrontendMessage(async (raw, userId) => {
                     const { target: message, error } = resolveTarget(messages, requestedId);
                     if (!message) {
                         spindle.toast.error(error || 'Message not found.', { userId });
-                        reply(false, false);
+                        reply(false, false, 'target_missing');
                         break;
                     }
                     const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id;
                     if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
                         spindle.toast.error('The message response used for this generation no longer exists.', { userId });
-                        reply(false, false);
+                        reply(false, false, 'target_missing');
                         break;
                     }
                     const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
                     let baseContent = message.swipes[swipeIndex] ?? message.content;
                     let didReplace = false;
+                    // Guard before mutation so rejected replacements remain atomic.
                     if (payload.replace) {
-                        const stripped = payload.replaceImageId
-                            ? stripShutterImageById(baseContent, payload.replaceImageId)
-                            : stripLastShutterImage(baseContent);
-                        if (payload.replaceImageId && !stripped.found) {
+                        const targetId = payload.replaceImageId;
+                        if (targetId && !containsShutterImageId(baseContent, targetId)) {
                             spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
-                            reply(false, false);
+                            reply(false, false, 'target_missing');
+                            break;
+                        }
+                        if (targetId && targetId === payload.imageId) {
+                            spindle.toast.info('This image is already in that position.', { userId });
+                            reply(false, false, 'same_image');
+                            break;
+                        }
+                        if (containsShutterImageId(baseContent, payload.imageId)) {
+                            spindle.toast.info('That image is already in this response, so nothing was replaced.', { userId });
+                            reply(false, false, 'duplicate');
+                            break;
+                        }
+                        const stripped = targetId
+                            ? stripShutterImageById(baseContent, targetId)
+                            : stripLastShutterImage(baseContent);
+                        if (!stripped.found) {
+                            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
+                            reply(false, false, 'target_missing');
                             break;
                         }
                         baseContent = stripped.content;
-                        didReplace = stripped.found;
+                        didReplace = true;
                     }
-                    // A selected history image may already exist elsewhere in the same
-                    // response. In replace mode, removing the exact source image is still
-                    // the requested mutation, so avoid adding a duplicate. In insert mode,
-                    // retain the existing no-op behaviour.
-                    if (containsShutterImageId(baseContent, payload.imageId)) {
-                        if (!didReplace) {
-                            spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
-                            reply(true, false);
-                            break;
-                        }
+                    else if (containsShutterImageId(baseContent, payload.imageId)) {
+                        spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
+                        spindle.toast.info('That image is already in this response.', { userId });
+                        reply(false, false, 'duplicate');
+                        break;
                     }
-                    else {
-                        baseContent += `\n\n![shutter](${imageUrl})`;
-                    }
+                    baseContent += `
+
+![shutter](${imageUrl})`;
                     const swipes = [...message.swipes];
                     swipes[swipeIndex] = baseContent;
                     await spindle.chat.updateMessage(payload.chatId, message.id, {
@@ -455,7 +468,7 @@ spindle.onFrontendMessage(async (raw, userId) => {
                 }
                 catch (err) {
                     spindle.log.error(`[insert_into_message] ${err instanceof Error ? err.message : String(err)}`);
-                    reply(false, false);
+                    reply(false, false, 'failed');
                 }
                 break;
             }
@@ -580,7 +593,7 @@ function createComms(ctx) {
         return request('clear', 'clear_generation_history', {}, false, 15000);
     }
     function insertIntoMessage(payload) {
-        return request('insert', 'insert_into_message', payload, { success: false, changed: false }, 15000);
+        return request('insert', 'insert_into_message', payload, { success: false, changed: false, reason: 'failed' }, 15000);
     }
     // Returns true when the payload was a comms round-trip reply (consumed).
     function handleBackendMessage(payload) {
@@ -612,7 +625,7 @@ function createComms(ctx) {
             entry.resolve(payload.record ?? null);
         }
         else if (payload.type === 'insert_result') {
-            entry.resolve({ success: payload.success === true, changed: payload.changed === true });
+            entry.resolve({ success: payload.success === true, changed: payload.changed === true, reason: payload.reason });
         }
         else {
             entry.resolve(true);
@@ -627,7 +640,7 @@ function createComms(ctx) {
             else if (entry.kind === 'clear')
                 entry.resolve(false);
             else if (entry.kind === 'insert')
-                entry.resolve({ success: false, changed: false });
+                entry.resolve({ success: false, changed: false, reason: 'failed' });
             else
                 entry.resolve(null);
             pending.delete(requestId);

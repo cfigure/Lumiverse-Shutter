@@ -479,19 +479,24 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
       }
 
       case 'insert_into_message': {
-        const reply = (success: boolean, changed: boolean): void => {
+        const reply = (
+          success: boolean,
+          changed: boolean,
+          reason?: 'duplicate' | 'same_image' | 'target_missing' | 'permission' | 'failed',
+        ): void => {
           if (!payload.requestId) return
           spindle.sendToFrontend({
             type: 'insert_result',
             requestId: payload.requestId,
             success,
             changed,
+            reason,
           }, userId)
         }
 
         if (!spindle.permissions.has('chat_mutation')) {
           spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId })
-          reply(false, false)
+          reply(false, false, 'permission')
           break
         }
 
@@ -501,14 +506,14 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           const { target: message, error } = resolveTarget(messages, requestedId)
           if (!message) {
             spindle.toast.error(error || 'Message not found.', { userId })
-            reply(false, false)
+            reply(false, false, 'target_missing')
             break
           }
 
           const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id
           if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
             spindle.toast.error('The message response used for this generation no longer exists.', { userId })
-            reply(false, false)
+            reply(false, false, 'target_missing')
             break
           }
 
@@ -516,32 +521,45 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           let baseContent = message.swipes[swipeIndex] ?? message.content
           let didReplace = false
 
+          // Guard before mutation so rejected replacements remain atomic.
           if (payload.replace) {
-            const stripped = payload.replaceImageId
-              ? stripShutterImageById(baseContent, payload.replaceImageId)
-              : stripLastShutterImage(baseContent)
-            if (payload.replaceImageId && !stripped.found) {
+            const targetId = payload.replaceImageId
+            if (targetId && !containsShutterImageId(baseContent, targetId)) {
               spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId })
-              reply(false, false)
+              reply(false, false, 'target_missing')
+              break
+            }
+            if (targetId && targetId === payload.imageId) {
+              spindle.toast.info('This image is already in that position.', { userId })
+              reply(false, false, 'same_image')
+              break
+            }
+            if (containsShutterImageId(baseContent, payload.imageId)) {
+              spindle.toast.info('That image is already in this response, so nothing was replaced.', { userId })
+              reply(false, false, 'duplicate')
+              break
+            }
+
+            const stripped = targetId
+              ? stripShutterImageById(baseContent, targetId)
+              : stripLastShutterImage(baseContent)
+            if (!stripped.found) {
+              spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId })
+              reply(false, false, 'target_missing')
               break
             }
             baseContent = stripped.content
-            didReplace = stripped.found
+            didReplace = true
+          } else if (containsShutterImageId(baseContent, payload.imageId)) {
+            spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
+            spindle.toast.info('That image is already in this response.', { userId })
+            reply(false, false, 'duplicate')
+            break
           }
 
-          // A selected history image may already exist elsewhere in the same
-          // response. In replace mode, removing the exact source image is still
-          // the requested mutation, so avoid adding a duplicate. In insert mode,
-          // retain the existing no-op behaviour.
-          if (containsShutterImageId(baseContent, payload.imageId)) {
-            if (!didReplace) {
-              spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`)
-              reply(true, false)
-              break
-            }
-          } else {
-            baseContent += `\n\n![shutter](${imageUrl})`
-          }
+          baseContent += `
+
+![shutter](${imageUrl})`
 
           const swipes = [...message.swipes]
           swipes[swipeIndex] = baseContent
@@ -558,7 +576,7 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
           reply(true, true)
         } catch (err) {
           spindle.log.error(`[insert_into_message] ${err instanceof Error ? err.message : String(err)}`)
-          reply(false, false)
+          reply(false, false, 'failed')
         }
         break
       }

@@ -370,14 +370,8 @@ export const SHUTTER_CSS = `
       color: var(--lumiverse-success, #4ade80);
       border-color: var(--lumiverse-success, #4ade80);
     }
-    /* Slots for host-rendered shared components (mountCloseButton /
-       mountSpinner) — the components own their internal styling so the
-       label tracks native design automatically. */
-    .sh-lightbox-prompt-close-slot {
-      display: inline-flex;
-      align-items: center;
-      margin-left: 8px;
-    }
+    /* The spinner remains host-rendered; Close uses Shutter's standard
+       compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
     .sh-lightbox-prompt-content .sh-lightbox-prompt-text { margin-bottom: 10px; }
@@ -422,7 +416,8 @@ export const SHUTTER_CSS = `
     }
     .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
-    .sh-lightbox-prompt-collapse {
+    .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt-close {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -443,7 +438,8 @@ export const SHUTTER_CSS = `
     }
     .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
-    .sh-lightbox-prompt-collapse:hover {
+    .sh-lightbox-prompt-collapse:hover,
+    .sh-lightbox-prompt-close:hover {
       color: var(--lumiverse-text, #eee);
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
@@ -478,12 +474,10 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
-    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy {
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
       padding-inline: 6px;
       font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
-    }
-    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close-slot {
-      margin-left: 2px;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {
       display: none !important;
@@ -493,7 +487,10 @@ export const SHUTTER_CSS = `
       height: auto;
       min-height: 0;
     }
-    .sh-lightbox-prompt-content .sh-prompt-source-tabs { margin-bottom: 8px; }
+    .sh-lightbox-prompt-content .sh-prompt-source-tabs {
+      margin: 0 auto 8px;
+      align-self: center;
+    }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;
     }

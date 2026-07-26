@@ -476,10 +476,9 @@ export function createLightboxPromptLabel(deps: {
     // Shared markup for the resolved label — used both by the fast path
     // (metadata settled before decoration) and the shell's in-place swap.
     // Function declaration so it hoists above the injection below. Builds
-    // only the swappable body — the heading (title, copy button, and the
-    // shared close-button slot) lives OUTSIDE .sh-lightbox-prompt-content
-    // so the host-mounted close button and the copy listener survive the
-    // shell → prompt swap without any destroy/remount or rewiring.
+    // only the swappable body — the heading and its stable action buttons
+    // live OUTSIDE .sh-lightbox-prompt-content so their listeners survive
+    // the shell → prompt swap without any destroy/remount or rewiring.
     function bodyContentHtml(view: PromptMetadataView, sources: PromptSources): string {
       const selector = sources.shutter && sources.embedded
         ? `<div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
@@ -497,9 +496,9 @@ export function createLightboxPromptLabel(deps: {
     // Inject a stable shell immediately — or, when metadata already settled,
     // the finished label directly. The shell avoids the jarring delayed box
     // pop-in while metadata is fetched/parsing, without blocking the native
-    // lightbox image or storing any prompt data. The ✕ is Lumiverse's shared
-    // close button and the loading indicator its shared spinner, mounted
-    // into the slot spans below so the label tracks native design.
+    // lightbox image or storing any prompt data. The Close action uses the
+    // same compact button treatment as the rest of Shutter's lightbox row;
+    // the loading indicator remains Lumiverse's shared spinner.
     //
     // BODY-LEVEL ON PURPOSE — do not move this back inside the portal. In
     // glass mode the native backdrop carries backdrop-filter: blur(), and in
@@ -519,7 +518,7 @@ export function createLightboxPromptLabel(deps: {
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>Prompt</button>
             <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
-            <span class="sh-lightbox-prompt-close-slot"></span>
+            <button class="sh-lightbox-prompt-close" type="button" title="Close prompt controls" aria-label="Close prompt controls">Close</button>
           </span>
         </div>
         <div class="sh-lightbox-prompt-scroll" hidden>
@@ -975,8 +974,8 @@ export function createLightboxPromptLabel(deps: {
     collapseBtn?.addEventListener('click', () => setPromptExpanded(false))
 
     // Heading chrome is stable across the shell → prompt swap (only
-    // .sh-lightbox-prompt-content is replaced), so copy is wired exactly
-    // once and the host-mounted close button is never torn down mid-life.
+    // .sh-lightbox-prompt-content is replaced), so the action listeners are
+    // wired exactly once and remain intact for the label's full lifetime.
     const copyBtn = wrapper.querySelector('.sh-lightbox-prompt-copy') as HTMLButtonElement | null
     copyBtn?.addEventListener('click', () => {
       if (!copyBtn || !resolvedPrompt) return
@@ -997,17 +996,10 @@ export function createLightboxPromptLabel(deps: {
       })
     })
 
-    // Shared components (native design parity). destroy() unmounts the
-    // component but leaves the slot spans in place, so cleanup is safe in
-    // any order relative to ctx.dom.uninject(wrapper).
-    const closeSlot = wrapper.querySelector('.sh-lightbox-prompt-close-slot')
-    const closeButtonHandle = closeSlot
-      // The one 'hide' dismissal: the viewer stays open, so the image should
-      // reclaim the caption space immediately. Wrapped so the handler's click
-      // event can't be forwarded into dismissLabel's reason parameter.
-      ? ctx.components.mountCloseButton(closeSlot, { onClick: () => dismissLabel('hide'), size: 'sm', variant: 'subtle', ariaLabel: 'Hide prompt' })
-      : null
-    if (closeButtonHandle) cleanupFns.push(() => closeButtonHandle.destroy())
+    // The one 'hide' dismissal: the native image viewer stays open, so the
+    // image should reclaim the caption space immediately.
+    const closeBtn = wrapper.querySelector('.sh-lightbox-prompt-close') as HTMLButtonElement | null
+    closeBtn?.addEventListener('click', () => dismissLabel('hide'))
 
     // Spinner lives inside the swappable content region, so it is destroyed
     // explicitly before the swap replaces its DOM (and via cleanup if the

@@ -556,8 +556,8 @@ if (!spindle.permissions.has('interceptor')) {
 }
 spindle.log.info('Shutter loaded!');
 
-};
 
+};
 __modules["./comms"] = function(module, exports, require) {
 "use strict";
 // Spindle message-channel round-trips, correlated by requestId with timeout
@@ -662,8 +662,8 @@ function createComms(ctx) {
     };
 }
 
-};
 
+};
 __modules["./frontend"] = function(module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1412,8 +1412,8 @@ function setup(ctx) {
     };
 }
 
-};
 
+};
 __modules["./history"] = function(module, exports, require) {
 "use strict";
 // Durable Shutter generation-history data shared by the frontend and backend.
@@ -1499,8 +1499,8 @@ function formatPromptMetadataForClipboard(view) {
     return lines.join('\n');
 }
 
-};
 
+};
 __modules["./icons"] = function(module, exports, require) {
 "use strict";
 // Shutter icon SVG paths. The mono and colour variants share identical geometry
@@ -1631,8 +1631,8 @@ function getIconSet(iconId) {
     return exports.ICON_SETS[iconId] ?? exports.ICON_SETS.aperture;
 }
 
-};
 
+};
 __modules["./lightbox"] = function(module, exports, require) {
 "use strict";
 // The lightbox prompt label: click-driven detection of the native image
@@ -1870,7 +1870,7 @@ function createLightboxPromptLabel(deps) {
                 const visible = area >= 10000 && intersectsViewport(rect);
                 // Prefer the fully laid-out lightbox image, but accept the pre-load
                 // <img> too so the loading shell can appear during the native spinner.
-                const score = (visible ? 1000000000 : 0) + area;
+                const score = (visible ? 1_000_000_000 : 0) + area;
                 if (!best || score > best.score)
                     best = { portalRoot, img, score };
             }
@@ -2083,10 +2083,9 @@ function createLightboxPromptLabel(deps) {
         // Shared markup for the resolved label — used both by the fast path
         // (metadata settled before decoration) and the shell's in-place swap.
         // Function declaration so it hoists above the injection below. Builds
-        // only the swappable body — the heading (title, copy button, and the
-        // shared close-button slot) lives OUTSIDE .sh-lightbox-prompt-content
-        // so the host-mounted close button and the copy listener survive the
-        // shell → prompt swap without any destroy/remount or rewiring.
+        // only the swappable body — the heading and its stable action buttons
+        // live OUTSIDE .sh-lightbox-prompt-content so their listeners survive
+        // the shell → prompt swap without any destroy/remount or rewiring.
         function bodyContentHtml(view, sources) {
             const selector = sources.shutter && sources.embedded
                 ? `<div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
@@ -2103,9 +2102,9 @@ function createLightboxPromptLabel(deps) {
         // Inject a stable shell immediately — or, when metadata already settled,
         // the finished label directly. The shell avoids the jarring delayed box
         // pop-in while metadata is fetched/parsing, without blocking the native
-        // lightbox image or storing any prompt data. The ✕ is Lumiverse's shared
-        // close button and the loading indicator its shared spinner, mounted
-        // into the slot spans below so the label tracks native design.
+        // lightbox image or storing any prompt data. The Close action uses the
+        // same compact button treatment as the rest of Shutter's lightbox row;
+        // the loading indicator remains Lumiverse's shared spinner.
         //
         // BODY-LEVEL ON PURPOSE — do not move this back inside the portal. In
         // glass mode the native backdrop carries backdrop-filter: blur(), and in
@@ -2125,7 +2124,7 @@ function createLightboxPromptLabel(deps) {
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>Prompt</button>
             <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
-            <span class="sh-lightbox-prompt-close-slot"></span>
+            <button class="sh-lightbox-prompt-close" type="button" title="Close prompt controls" aria-label="Close prompt controls">Close</button>
           </span>
         </div>
         <div class="sh-lightbox-prompt-scroll" hidden>
@@ -2571,8 +2570,8 @@ function createLightboxPromptLabel(deps) {
         viewBtn?.addEventListener('click', () => setPromptExpanded(true));
         collapseBtn?.addEventListener('click', () => setPromptExpanded(false));
         // Heading chrome is stable across the shell → prompt swap (only
-        // .sh-lightbox-prompt-content is replaced), so copy is wired exactly
-        // once and the host-mounted close button is never torn down mid-life.
+        // .sh-lightbox-prompt-content is replaced), so the action listeners are
+        // wired exactly once and remain intact for the label's full lifetime.
         const copyBtn = wrapper.querySelector('.sh-lightbox-prompt-copy');
         copyBtn?.addEventListener('click', () => {
             if (!copyBtn || !resolvedPrompt)
@@ -2595,18 +2594,10 @@ function createLightboxPromptLabel(deps) {
                     copyBtn.textContent = 'Copy'; }, 1200);
             });
         });
-        // Shared components (native design parity). destroy() unmounts the
-        // component but leaves the slot spans in place, so cleanup is safe in
-        // any order relative to ctx.dom.uninject(wrapper).
-        const closeSlot = wrapper.querySelector('.sh-lightbox-prompt-close-slot');
-        const closeButtonHandle = closeSlot
-            // The one 'hide' dismissal: the viewer stays open, so the image should
-            // reclaim the caption space immediately. Wrapped so the handler's click
-            // event can't be forwarded into dismissLabel's reason parameter.
-            ? ctx.components.mountCloseButton(closeSlot, { onClick: () => dismissLabel('hide'), size: 'sm', variant: 'subtle', ariaLabel: 'Hide prompt' })
-            : null;
-        if (closeButtonHandle)
-            cleanupFns.push(() => closeButtonHandle.destroy());
+        // The one 'hide' dismissal: the native image viewer stays open, so the
+        // image should reclaim the caption space immediately.
+        const closeBtn = wrapper.querySelector('.sh-lightbox-prompt-close');
+        closeBtn?.addEventListener('click', () => dismissLabel('hide'));
         // Spinner lives inside the swappable content region, so it is destroyed
         // explicitly before the swap replaces its DOM (and via cleanup if the
         // label is dismissed while still loading). Nullable guard keeps the two
@@ -2814,8 +2805,8 @@ function createLightboxPromptLabel(deps) {
     };
 }
 
-};
 
+};
 __modules["./metadata"] = function(module, exports, require) {
 "use strict";
 // Image-metadata resolution: PNG text-chunk parsing and provider prompt
@@ -2984,8 +2975,8 @@ function extractImageId(src) {
     return match ? match[1] : null;
 }
 
-};
 
+};
 __modules["./modals"] = function(module, exports, require) {
 "use strict";
 // Shutter's modal surfaces: the post-generation destination modal, the
@@ -3904,8 +3895,8 @@ function createModals(deps) {
     };
 }
 
-};
 
+};
 __modules["./settings-panel"] = function(module, exports, require) {
 "use strict";
 // The extension settings panel (mount-once pattern): host shared components
@@ -4396,8 +4387,8 @@ function createSettingsPanel(deps) {
     };
 }
 
-};
 
+};
 __modules["./settings"] = function(module, exports, require) {
 "use strict";
 // Shared settings model — the single source of truth for Shutter's settings
@@ -4484,8 +4475,8 @@ function validateSettings(s) {
     return out;
 }
 
-};
 
+};
 __modules["./styles"] = function(module, exports, require) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.
@@ -4861,14 +4852,8 @@ exports.SHUTTER_CSS = `
       color: var(--lumiverse-success, #4ade80);
       border-color: var(--lumiverse-success, #4ade80);
     }
-    /* Slots for host-rendered shared components (mountCloseButton /
-       mountSpinner) — the components own their internal styling so the
-       label tracks native design automatically. */
-    .sh-lightbox-prompt-close-slot {
-      display: inline-flex;
-      align-items: center;
-      margin-left: 8px;
-    }
+    /* The spinner remains host-rendered; Close uses Shutter's standard
+       compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
     .sh-lightbox-prompt-content .sh-lightbox-prompt-text { margin-bottom: 10px; }
@@ -4913,7 +4898,8 @@ exports.SHUTTER_CSS = `
     }
     .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
-    .sh-lightbox-prompt-collapse {
+    .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt-close {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -4934,7 +4920,8 @@ exports.SHUTTER_CSS = `
     }
     .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
-    .sh-lightbox-prompt-collapse:hover {
+    .sh-lightbox-prompt-collapse:hover,
+    .sh-lightbox-prompt-close:hover {
       color: var(--lumiverse-text, #eee);
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
@@ -4969,12 +4956,10 @@ exports.SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
-    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy {
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
       padding-inline: 6px;
       font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
-    }
-    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close-slot {
-      margin-left: 2px;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {
       display: none !important;
@@ -4984,7 +4969,10 @@ exports.SHUTTER_CSS = `
       height: auto;
       min-height: 0;
     }
-    .sh-lightbox-prompt-content .sh-prompt-source-tabs { margin-bottom: 8px; }
+    .sh-lightbox-prompt-content .sh-prompt-source-tabs {
+      margin: 0 auto 8px;
+      align-self: center;
+    }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;
     }
@@ -4992,6 +4980,7 @@ exports.SHUTTER_CSS = `
 // Shared by the lightbox pill's Copy and the View Prompt modal's Copy —
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
+
 
 };
 

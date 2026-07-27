@@ -85,9 +85,18 @@ export const SHUTTER_CSS = `
        existing footprint, and the placeholder overlays it instead of making
        the modal taller. */
     .sh-preview > img[hidden] {
-      display: block !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
+      display: none !important;
+    }
+
+    .sh-history-body .sh-preview.sh-preview-unavailable {
+      height: min(28vh, 260px);
+      min-height: 0;
+    }
+
+    @media (max-width: 560px) {
+      .sh-history-body .sh-preview.sh-preview-unavailable {
+      height: min(24vh, 220px);
+      }
     }
     .sh-preview.sh-preview-unavailable { cursor: default; }
     .sh-image-unavailable[hidden] { display: none !important; }

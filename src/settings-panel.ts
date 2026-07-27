@@ -203,7 +203,7 @@ export function createSettingsPanel(deps: {
     })
 
     // Generation History (parent)
-    const historyRow = makeRow('Generation History', 'Save successful Shutter-managed generations and their submitted prompts. Results handled natively by ImageGen are not recorded.')
+    const historyRow = makeRow('Generation History', 'Save successful Shutter-managed generations and their submitted prompts.')
     container.appendChild(historyRow.row)
     const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
       checked: s.generationHistory,

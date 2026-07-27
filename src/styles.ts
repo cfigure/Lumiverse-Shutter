@@ -68,7 +68,7 @@ export const SHUTTER_CSS = `
     /* Generation History deliberately inherits the same body gap and preview
        sizing as Image Generated. Extra History content must fit around that
        established preview budget rather than making the preview taller. */
-    .sh-history-summary {
+    .sh-generation-meta {
       min-width: 0;
       padding: 0 2px 2px;
       color: var(--lumiverse-text-muted, #999);
@@ -419,6 +419,10 @@ export const SHUTTER_CSS = `
        compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
+    .sh-lightbox-prompt-content > .sh-lightbox-prompt-heading {
+      justify-content: flex-start;
+      text-align: left;
+    }
     .sh-lightbox-prompt-content .sh-lightbox-prompt-text { margin-bottom: 10px; }
     .sh-lightbox-prompt-text:last-child { margin-bottom: 0; }
     .sh-lightbox-prompt-text { white-space: pre-wrap; word-break: break-word; }

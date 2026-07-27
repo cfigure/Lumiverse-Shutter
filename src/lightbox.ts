@@ -489,10 +489,13 @@ export function createLightboxPromptLabel(deps: {
           </div>`
         : ''
       const details = formatPromptMetadataLine(view)
+      const metadata = details
+        ? `<div class="sh-prompt-source-meta">${escapeHtml(details)}</div>`
+        : ''
       const negativeBlock = view.negativePrompt
         ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
         : ''
-      return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details)}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
+      return `${selector}${metadata}<div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`
     }
 
     // Inject a stable shell immediately — or, when metadata already settled,

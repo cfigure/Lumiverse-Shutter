@@ -930,13 +930,13 @@ function humaniseGenerationOrigin(origin) {
     }
 }
 function formatPromptMetadataLine(view) {
-    const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
+    const details = [];
     if (view.createdAt)
         details.push(new Date(view.createdAt).toLocaleString());
     if (view.provider)
-        details.push(`Provider: ${view.provider}`);
+        details.push(view.provider);
     if (view.model)
-        details.push(`Model: ${view.model}`);
+        details.push(view.model);
     return details.join(' · ');
 }
 function formatPromptMetadataForClipboard(view) {
@@ -1541,10 +1541,13 @@ function createLightboxPromptLabel(deps) {
           </div>`
                 : '';
             const details = (0, history_1.formatPromptMetadataLine)(view);
+            const metadata = details
+                ? `<div class="sh-prompt-source-meta">${escapeHtml(details)}</div>`
+                : '';
             const negativeBlock = view.negativePrompt
                 ? `<div class="sh-lightbox-prompt-heading">Negative Prompt</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.negativePrompt)}</div>`
                 : '';
-            return `${selector}<div class="sh-prompt-source-meta">${escapeHtml(details)}</div><div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
+            return `${selector}${metadata}<div class="sh-lightbox-prompt-text">${escapeHtml(view.prompt)}</div>${negativeBlock}`;
         }
         // Inject a stable shell immediately — or, when metadata already settled,
         // the finished label directly. The shell avoids the jarring delayed box
@@ -2663,7 +2666,9 @@ function createModals(deps) {
                 button.classList.toggle('sh-active', selected);
                 button.setAttribute('aria-selected', String(selected));
             });
-            meta.textContent = (0, history_1.formatPromptMetadataLine)(view);
+            const metadataLine = (0, history_1.formatPromptMetadataLine)(view);
+            meta.textContent = metadataLine;
+            meta.hidden = !metadataLine;
             fields.replaceChildren();
             fields.classList.toggle('sh-no-negative', !view.negativePrompt);
             fields.appendChild(makeReadonlyPromptField('Positive Prompt', view.prompt || 'Prompt unavailable', 'positive'));
@@ -2871,6 +2876,9 @@ function createModals(deps) {
         if (historyEnabled)
             previewWrap.appendChild(histPill);
         container.appendChild(previewWrap);
+        const generationMeta = document.createElement('div');
+        generationMeta.className = 'sh-generation-meta';
+        container.appendChild(generationMeta);
         function applyDestinationAvailability(status) {
             selectedAvailability = status;
             const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed);
@@ -2925,6 +2933,7 @@ function createModals(deps) {
             navNext.disabled = atEnd && !entry.prompt.trim();
             navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation';
             histCount.textContent = `${idx + 1} / ${history.length}`;
+            generationMeta.textContent = (0, history_1.formatPromptMetadataLine)((0, history_1.promptViewFromRecord)(entry));
         }
         let regenerating = false;
         async function regenerateFromSelected() {
@@ -3170,7 +3179,7 @@ function createModals(deps) {
         previewWrap.appendChild(nav);
         container.appendChild(previewWrap);
         const summary = document.createElement('div');
-        summary.className = 'sh-history-summary';
+        summary.className = 'sh-generation-meta';
         container.appendChild(summary);
         const actions = document.createElement('div');
         actions.className = 'sh-prompt-actions sh-history-actions';
@@ -4289,7 +4298,7 @@ exports.SHUTTER_CSS = `
     /* Generation History deliberately inherits the same body gap and preview
        sizing as Image Generated. Extra History content must fit around that
        established preview budget rather than making the preview taller. */
-    .sh-history-summary {
+    .sh-generation-meta {
       min-width: 0;
       padding: 0 2px 2px;
       color: var(--lumiverse-text-muted, #999);
@@ -4640,6 +4649,10 @@ exports.SHUTTER_CSS = `
        compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
+    .sh-lightbox-prompt-content > .sh-lightbox-prompt-heading {
+      justify-content: flex-start;
+      text-align: left;
+    }
     .sh-lightbox-prompt-content .sh-lightbox-prompt-text { margin-bottom: 10px; }
     .sh-lightbox-prompt-text:last-child { margin-bottom: 0; }
     .sh-lightbox-prompt-text { white-space: pre-wrap; word-break: break-word; }

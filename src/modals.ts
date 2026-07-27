@@ -313,7 +313,9 @@ export function createModals(deps: {
         button.setAttribute('aria-selected', String(selected))
       })
 
-      meta.textContent = formatPromptMetadataLine(view)
+      const metadataLine = formatPromptMetadataLine(view)
+      meta.textContent = metadataLine
+      meta.hidden = !metadataLine
 
       fields.replaceChildren()
       fields.classList.toggle('sh-no-negative', !view.negativePrompt)
@@ -541,6 +543,10 @@ export function createModals(deps: {
     if (historyEnabled) previewWrap.appendChild(histPill)
     container.appendChild(previewWrap)
 
+    const generationMeta = document.createElement('div')
+    generationMeta.className = 'sh-generation-meta'
+    container.appendChild(generationMeta)
+
     function applyDestinationAvailability(status: GeneratedImageAvailability): void {
       selectedAvailability = status
       const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed)
@@ -594,6 +600,7 @@ export function createModals(deps: {
       navNext.disabled = atEnd && !entry.prompt.trim()
       navNext.title = atEnd ? 'Regenerate image (same prompt)' : 'Next generation'
       histCount.textContent = `${idx + 1} / ${history.length}`
+      generationMeta.textContent = formatPromptMetadataLine(promptViewFromRecord(entry))
     }
 
     let regenerating = false
@@ -830,7 +837,7 @@ export function createModals(deps: {
     container.appendChild(previewWrap)
 
     const summary = document.createElement('div')
-    summary.className = 'sh-history-summary'
+    summary.className = 'sh-generation-meta'
     container.appendChild(summary)
 
     const actions = document.createElement('div')

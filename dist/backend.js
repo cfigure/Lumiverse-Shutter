@@ -772,13 +772,13 @@ function humaniseGenerationOrigin(origin) {
     }
 }
 function formatPromptMetadataLine(view) {
-    const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image'];
+    const details = [];
     if (view.createdAt)
         details.push(new Date(view.createdAt).toLocaleString());
     if (view.provider)
-        details.push(`Provider: ${view.provider}`);
+        details.push(view.provider);
     if (view.model)
-        details.push(`Model: ${view.model}`);
+        details.push(view.model);
     return details.join(' · ');
 }
 function formatPromptMetadataForClipboard(view) {

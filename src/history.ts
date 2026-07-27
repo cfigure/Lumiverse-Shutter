@@ -109,10 +109,10 @@ export function humaniseGenerationOrigin(origin?: GenerationOrigin): string {
 
 
 export function formatPromptMetadataLine(view: PromptMetadataView): string {
-  const details = [view.source === 'shutter' ? 'Saved by Shutter' : 'Embedded in image']
+  const details: string[] = []
   if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
-  if (view.provider) details.push(`Provider: ${view.provider}`)
-  if (view.model) details.push(`Model: ${view.model}`)
+  if (view.provider) details.push(view.provider)
+  if (view.model) details.push(view.model)
   return details.join(' · ')
 }
 

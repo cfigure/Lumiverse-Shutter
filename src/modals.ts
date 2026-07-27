@@ -882,8 +882,22 @@ export function createModals(deps: {
         if (!view.prompt.trim()) return
         modal.dismiss()
         closeParentPrompt?.()
-        closeUnderlyingLightbox?.()
-        openPromptPreviewModal(view.prompt, view.negativePrompt, entry.target, false, false, 'preview')
+
+        const openPreview = () => {
+          openPromptPreviewModal(view.prompt, view.negativePrompt, entry.target, false, false, 'preview')
+        }
+
+        if (closeUnderlyingLightbox) {
+          // The native lightbox closes via a zero-delay synthetic Escape.
+          // Open the next Shutter modal in the following task so it cannot
+          // intercept that Escape and leave the native viewer behind.
+          closeUnderlyingLightbox()
+          setTimeout(openPreview, 0)
+        } else {
+          // Ordinary Shutter modal-to-modal transitions stay synchronous to
+          // avoid exposing a paint frame with no backdrop between surfaces.
+          openPreview()
+        }
       }
       renderImagePromptSurface(modal, {
         initialView: shutterView,

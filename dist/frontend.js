@@ -2509,13 +2509,7 @@ function createModals(deps) {
         title.className = 'sh-image-unavailable-title';
         const detail = document.createElement('div');
         detail.className = 'sh-image-unavailable-detail';
-        // Keep all presentation inside one centred group. The absolute overlay
-        // itself carries no padding, gap, minimum height, or other layout-bearing
-        // dimensions, so it cannot enlarge the preview or the host modal.
-        const content = document.createElement('div');
-        content.className = 'sh-image-unavailable-content';
-        content.append(icon, title, detail);
-        root.append(content);
+        root.append(icon, title, detail);
         return { root, title, detail };
     }
     function setUnavailablePreview(placeholder, state) {
@@ -4292,8 +4286,9 @@ exports.SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
-    .sh-history-body { gap: 10px; }
-    .sh-history-body .sh-preview img { max-height: min(36vh, 360px); }
+    /* Generation History deliberately inherits the same body gap and preview
+       sizing as Image Generated. Extra History content must fit around that
+       established preview budget rather than making the preview taller. */
     .sh-history-summary {
       min-width: 0;
       padding: 0 2px 2px;
@@ -4302,51 +4297,33 @@ exports.SHUTTER_CSS = `
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
-    .sh-history-actions { margin-top: 2px; }
 
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
-    /* Keep the unavailable panel visually exclusive without removing the
-       image from layout. The hidden image therefore preserves the preview's
-       existing footprint, and the placeholder overlays it instead of making
-       the modal taller. */
-    .sh-preview > img[hidden] {
-      display: block !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
-    }
+    /* Missing-image presentation is deliberately compact and participates in
+       normal layout. It does not preserve the broken image's dimensions or
+       overlay an invisible image. */
+    .sh-preview > img[hidden] { display: none !important; }
     .sh-preview.sh-preview-unavailable { cursor: default; }
     .sh-image-unavailable[hidden] { display: none !important; }
     .sh-image-unavailable {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-      display: grid;
-      place-items: center;
-      overflow: hidden;
-      padding: 0;
-      margin: 0;
-      border: 0;
+      width: 100%;
+      height: min(24vh, 180px);
+      min-height: 0;
       box-sizing: border-box;
-      pointer-events: none;
-      color: var(--lumiverse-text-muted, #999);
-      background:
-        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
-        var(--lumiverse-bg-elevated);
-    }
-    .sh-image-unavailable-content {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      width: min(420px, calc(100% - 24px));
-      max-height: 100%;
       margin: 0;
       padding: 0;
       text-align: center;
-      overflow: hidden;
+      color: var(--lumiverse-text-muted, #999);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
+        var(--lumiverse-bg-elevated);
     }
     .sh-image-unavailable-icon {
       width: 48px;
@@ -4365,7 +4342,7 @@ exports.SHUTTER_CSS = `
       line-height: 1.3;
     }
     .sh-image-unavailable-detail {
-      max-width: 420px;
+      width: min(420px, calc(100% - 24px));
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
       line-height: 1.5;
     }

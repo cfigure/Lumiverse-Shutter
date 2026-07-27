@@ -95,7 +95,7 @@ export const SHUTTER_CSS = `
 
     @media (max-width: 560px) {
       .sh-history-body .sh-preview.sh-preview-unavailable {
-      height: min(24vh, 220px);
+      height: min(24vh, 200px);
       }
     }
     .sh-preview.sh-preview-unavailable { cursor: default; }

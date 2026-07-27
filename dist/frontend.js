@@ -930,6 +930,8 @@ function humaniseGenerationOrigin(origin) {
     }
 }
 function formatPromptMetadataLine(view) {
+    if (view.source === 'embedded')
+        return 'Embedded in image';
     const details = [];
     if (view.createdAt)
         details.push(new Date(view.createdAt).toLocaleString());

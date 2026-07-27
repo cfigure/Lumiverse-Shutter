@@ -109,6 +109,8 @@ export function humaniseGenerationOrigin(origin?: GenerationOrigin): string {
 
 
 export function formatPromptMetadataLine(view: PromptMetadataView): string {
+  if (view.source === 'embedded') return 'Embedded in image'
+
   const details: string[] = []
   if (view.createdAt) details.push(new Date(view.createdAt).toLocaleString())
   if (view.provider) details.push(view.provider)

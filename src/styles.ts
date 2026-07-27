@@ -67,6 +67,9 @@ export const SHUTTER_CSS = `
     .sh-replace-row { padding: 2px 0; }
     .sh-history-body { gap: 10px; }
     .sh-history-body .sh-preview img { max-height: min(36vh, 360px); }
+    .sh-history-body .sh-preview.sh-preview-unavailable {
+      height: min(36vh, 360px);
+    }
     .sh-history-summary {
       min-width: 0;
       padding: 0 2px 2px;
@@ -80,23 +83,10 @@ export const SHUTTER_CSS = `
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
-    /* Keep the unavailable panel visually exclusive without removing the
-       image from layout. The hidden image therefore preserves the preview's
-       existing footprint, and the placeholder overlays it instead of making
-       the modal taller. */
+    /* A missing image must not contribute any layout height. The History-only
+       unavailable preview rule above supplies the display window instead. */
     .sh-preview > img[hidden] {
       display: none !important;
-    }
-
-    .sh-history-body .sh-preview.sh-preview-unavailable {
-      height: min(28vh, 260px);
-      min-height: 0;
-    }
-
-    @media (max-width: 560px) {
-      .sh-history-body .sh-preview.sh-preview-unavailable {
-      height: min(24vh, 200px);
-      }
     }
     .sh-preview.sh-preview-unavailable { cursor: default; }
     .sh-image-unavailable[hidden] { display: none !important; }
@@ -167,6 +157,15 @@ export const SHUTTER_CSS = `
        padding shrink ~18%; expanded hit-areas hold ~40px touch targets.
        Breakpoint matches the modal's action-grid pivot below. */
     @media (max-width: 560px) {
+      /* Generation History carries provenance text below the preview, so its
+         mobile preview gets a smaller vertical budget than Image Generated.
+         The unavailable state uses the exact same budget. */
+      .sh-history-body .sh-preview img {
+        max-height: min(30vh, 260px);
+      }
+      .sh-history-body .sh-preview.sh-preview-unavailable {
+        height: min(30vh, 260px);
+      }
       .sh-hist-pill { right: 6px; bottom: 6px; gap: 1px; padding: 2px 3px; border-radius: 14px; }
       .sh-hist-btn { width: 20px; height: 20px; }
       .sh-hist-btn::after { inset: -10px; }

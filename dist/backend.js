@@ -132,6 +132,43 @@ async function migratePreReleaseHistoryUnlocked(legacyState, userId) {
     }
     return state;
 }
+async function inferPreReleaseStateWithoutStateUnlocked(existingFiles, userId) {
+    // The unreleased 1.0.7 build used { version: 1, epoch: 1 } as an in-memory
+    // fallback but did not persist state.json until Clear History was used. A
+    // tester can therefore have valid epoch-1 target records with no state file.
+    // Only recognise that exact legacy file layout; never infer ownership for
+    // compact chat snapshots or unknown files.
+    const legacyPath = /^epochs\/(\d+)\/(targets|records)\/.+\.json$/;
+    const epochs = new Set();
+    const targetPaths = [];
+    for (const listedPath of existingFiles) {
+        const relativePath = listedPath.replace(/^\/+/, '');
+        const match = legacyPath.exec(relativePath);
+        if (!match)
+            return null;
+        const epoch = Number.parseInt(match[1] ?? '', 10);
+        if (!Number.isInteger(epoch) || epoch <= 0)
+            return null;
+        epochs.add(epoch);
+        if (match[2] === 'targets')
+            targetPaths.push({ epoch, relativePath });
+    }
+    if (epochs.size !== 1 || targetPaths.length === 0)
+        return null;
+    const [epoch] = epochs;
+    if (!epoch)
+        return null;
+    let validRecordCount = 0;
+    for (const targetPath of targetPaths) {
+        const stored = await readStoredJson(`${history_store_1.HISTORY_STORE_PREFIX}/${targetPath.relativePath}`, userId);
+        if (stored.status !== 'valid' || !(0, history_store_1.isGenerationHistoryRecord)(stored.value))
+            continue;
+        if (stored.value.target.historyEpoch !== epoch)
+            continue;
+        validRecordCount++;
+    }
+    return validRecordCount > 0 ? { version: 1, epoch } : null;
+}
 async function loadHistoryStateUnlocked(userId) {
     const stored = await readStoredJson(history_store_1.HISTORY_STATE_PATH, userId);
     if (stored.status === 'valid') {
@@ -147,6 +184,11 @@ async function loadHistoryStateUnlocked(userId) {
     }
     const existingFiles = await spindle.userStorage.list(history_store_1.HISTORY_STORE_PREFIX, userId);
     if (existingFiles.length > 0) {
+        const inferredLegacyState = await inferPreReleaseStateWithoutStateUnlocked(existingFiles, userId);
+        if (inferredLegacyState) {
+            spindle.log.info(`[history] Found pre-release epoch ${inferredLegacyState.epoch} history without state.json; importing it into the public v1 snapshot store.`);
+            return migratePreReleaseHistoryUnlocked(inferredLegacyState, userId);
+        }
         throw new Error('Generation History files exist without a readable state file and were not overwritten.');
     }
     const state = { schemaVersion: 1, epoch: 1 };

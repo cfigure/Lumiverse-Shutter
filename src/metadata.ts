@@ -163,7 +163,7 @@ export async function resolveEmbeddedPromptForImage(tag: ShutterTag | null, ligh
   return resolved
 }
 
-// Backwards-compatible alias for internal callers outside the 1.0.7 source split.
+// Backwards-compatible alias for internal callers outside the 1.1.0 source split.
 export const resolvePromptForImage = resolveEmbeddedPromptForImage
 
 export function extractImageId(src: string): string | null {

@@ -487,9 +487,14 @@ export const SHUTTER_CSS = `
       height: auto;
       min-height: 0;
     }
-    .sh-lightbox-prompt-content .sh-prompt-source-tabs {
-      margin: 0 auto 8px;
-      align-self: center;
+    .sh-lightbox-prompt-source-row {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    .sh-lightbox-prompt-source-row .sh-prompt-source-tabs {
+      margin: 0;
     }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;

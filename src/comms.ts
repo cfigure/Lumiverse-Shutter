@@ -14,6 +14,7 @@ export type Comms = ReturnType<typeof createComms>
 type PendingRequest = {
   kind: 'target' | 'tag' | 'history' | 'record' | 'clear' | 'insert'
   resolve: (value: any) => void
+  fallback: unknown
   timeout: ReturnType<typeof setTimeout>
 }
 
@@ -33,7 +34,7 @@ export function createComms(ctx: SpindleFrontendContext) {
         pending.delete(requestId)
         resolve(fallback)
       }, timeoutMs)
-      pending.set(requestId, { kind, resolve, timeout })
+      pending.set(requestId, { kind, resolve, fallback, timeout })
       ctx.sendToBackend({ type, requestId, ...payload })
     })
   }
@@ -57,8 +58,8 @@ export function createComms(ctx: SpindleFrontendContext) {
     return request('history', 'get_generation_history', { target }, [])
   }
 
-  function getGenerationRecord(imageId: string): Promise<GenerationHistoryRecord | null> {
-    return request('record', 'get_generation_record', { imageId }, null)
+  function getGenerationRecord(chatId: string, imageId: string): Promise<GenerationHistoryRecord | null> {
+    return request('record', 'get_generation_record', { chatId, imageId }, null)
   }
 
   function clearGenerationHistory(): Promise<boolean> {
@@ -85,6 +86,14 @@ export function createComms(ctx: SpindleFrontendContext) {
     if (!payload || typeof payload.requestId !== 'string') return false
     const entry = pending.get(payload.requestId)
     if (!entry) return false
+
+    if (payload.type === 'request_failed') {
+      clearTimeout(entry.timeout)
+      pending.delete(payload.requestId)
+      console.warn(`[Shutter] ${typeof payload.operation === 'string' ? payload.operation : 'request'} failed: ${typeof payload.error === 'string' ? payload.error : 'Unknown backend error'}`)
+      entry.resolve(entry.fallback)
+      return true
+    }
 
     const matches =
       (payload.type === 'generation_target' && entry.kind === 'target')

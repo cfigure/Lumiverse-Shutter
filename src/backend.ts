@@ -7,6 +7,24 @@ import {
   type GenerationHistoryRecord,
   type GenerationTarget,
 } from './history'
+import {
+  HISTORY_STATE_PATH,
+  HISTORY_STORE_PREFIX,
+  appendRecordToSnapshot,
+  createHistoryRecord,
+  historyChatSnapshotPath,
+  historyEpochPrefix,
+  isGenerationHistoryRecord,
+  isHistoryStateV1,
+  parseChatHistorySnapshotV1,
+  recordMatchesInput,
+  recordMatchesTarget,
+  selectNewestSnapshot,
+  type ChatHistorySnapshotV1,
+  type HistoryStateV1,
+  type SnapshotCandidate,
+  type SnapshotSlot,
+} from './history-store'
 
 // ── Types ──
 
@@ -17,7 +35,7 @@ type FrontendMessage =
   | { type: 'resolve_generation_target'; requestId: string; chatId: string; messageId: string }
   | { type: 'append_generation_history'; requestId: string; target: GenerationTarget; entry: GenerationHistoryInput }
   | { type: 'get_generation_history'; requestId: string; target: GenerationTarget }
-  | { type: 'get_generation_record'; requestId: string; imageId: string }
+  | { type: 'get_generation_record'; requestId: string; chatId: string; imageId: string }
   | { type: 'clear_generation_history'; requestId: string }
   | { type: 'delete_image'; messageId: string; chatId: string }
   | { type: 'delete_all_images'; messageId: string; chatId: string }
@@ -55,107 +73,218 @@ void loadSettings()
 
 // ── Durable generation history ──
 
-const HISTORY_PREFIX = 'history/v1'
-const HISTORY_STATE_PATH = `${HISTORY_PREFIX}/state.json`
+const historyQueues = new Map<string, Promise<void>>()
 
-type HistoryState = { version: 1; epoch: number }
+type StoredJsonResult =
+  | { status: 'absent' }
+  | { status: 'valid'; value: unknown }
+  | { status: 'invalid'; error: string }
 
-type GenerationHistoryPointer = {
-  version: 1
-  imageId: string
-  createdAt: number
-  recordPath: string
+type LoadedChatHistory = {
+  current: SnapshotCandidate | null
+  validCandidates: SnapshotCandidate[]
+  invalidSlots: SnapshotSlot[]
 }
 
-function safePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '_')
+function historyQueueKey(userId?: string): string {
+  return userId || '__extension_owner__'
 }
 
-function historyEpochPrefix(epoch: number): string {
-  return `${HISTORY_PREFIX}/epochs/${epoch}/`
+function withHistoryQueue<T>(userId: string | undefined, operation: () => Promise<T>): Promise<T> {
+  const key = historyQueueKey(userId)
+  const previous = historyQueues.get(key) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(operation)
+  const settled = next.then(() => undefined, () => undefined)
+  historyQueues.set(key, settled)
+  void settled.finally(() => {
+    if (historyQueues.get(key) === settled) historyQueues.delete(key)
+  })
+  return next
 }
 
-function historyTargetPrefix(target: Pick<GenerationTarget, 'chatId' | 'messageId' | 'historyEpoch'>): string {
-  return `${historyEpochPrefix(target.historyEpoch)}targets/${safePathSegment(target.chatId)}/${safePathSegment(target.messageId)}/`
+async function readStoredJson(path: string, userId?: string): Promise<StoredJsonResult> {
+  if (!await spindle.userStorage.exists(path, userId)) return { status: 'absent' }
+  try {
+    return { status: 'valid', value: await spindle.userStorage.getJson(path, { userId }) }
+  } catch (error) {
+    return { status: 'invalid', error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
-function historyTargetRecordPath(record: GenerationHistoryRecord): string {
-  return `${historyTargetPrefix(record.target)}${record.createdAt}-${safePathSegment(record.imageId)}.json`
+async function writeAndVerifyState(state: HistoryStateV1, userId?: string): Promise<void> {
+  await spindle.userStorage.setJson(HISTORY_STATE_PATH, state, { indent: 2, userId })
+  const stored = await readStoredJson(HISTORY_STATE_PATH, userId)
+  if (stored.status !== 'valid' || !isHistoryStateV1(stored.value) || stored.value.epoch !== state.epoch) {
+    throw new Error('Generation History state could not be verified after writing.')
+  }
 }
 
-function historyImageRecordPath(imageId: string, epoch: number): string {
-  return `${historyEpochPrefix(epoch)}records/${safePathSegment(imageId)}.json`
-}
-
-async function loadHistoryState(userId?: string): Promise<HistoryState> {
-  const state = await spindle.userStorage.getJson(HISTORY_STATE_PATH, {
-    fallback: { version: 1, epoch: 1 } as HistoryState,
-    userId,
-  }) as HistoryState
-  const epoch = Number.isFinite(state?.epoch) && state.epoch > 0 ? Math.floor(state.epoch) : 1
-  return { version: 1, epoch }
-}
-
-function isHistoryRecord(value: unknown): value is GenerationHistoryRecord {
-  const record = value as GenerationHistoryRecord | null
-  return !!record
-    && record.version === 1
-    && typeof record.imageId === 'string'
-    && typeof record.createdAt === 'number'
-    && typeof record.prompt === 'string'
-    && typeof record.negativePrompt === 'string'
-    && typeof record.promptMode === 'string'
-    && (record.provider === undefined || typeof record.provider === 'string')
-    && (record.model === undefined || typeof record.model === 'string')
-    && !!record.target
-    && typeof record.target.chatId === 'string'
-    && typeof record.target.messageId === 'string'
-}
-
-function isHistoryPointer(value: unknown): value is GenerationHistoryPointer {
-  const pointer = value as GenerationHistoryPointer | null
-  return !!pointer
-    && pointer.version === 1
-    && typeof pointer.imageId === 'string'
-    && typeof pointer.createdAt === 'number'
-    && typeof pointer.recordPath === 'string'
-}
-
-function recordMatchesTarget(record: GenerationHistoryRecord, target: GenerationTarget): boolean {
-  if (record.target.historyEpoch !== target.historyEpoch) return false
-  if (record.target.chatId !== target.chatId || record.target.messageId !== target.messageId) return false
-
-  if (record.target.swipeDate !== null && target.swipeDate !== null) {
-    if (record.target.swipeDate !== target.swipeDate) return false
-    // Timestamps are normally unique. When either side observed a duplicate,
-    // use the stripped-content fingerprint to avoid merging two same-second swipes.
-    if (record.target.duplicateSwipeDate || target.duplicateSwipeDate) {
-      return record.target.swipeFingerprint === target.swipeFingerprint
+async function writeAndVerifySnapshot(
+  snapshot: ChatHistorySnapshotV1,
+  slot: SnapshotSlot,
+  userId?: string,
+): Promise<void> {
+  const path = historyChatSnapshotPath(snapshot.chatId, snapshot.epoch, slot)
+  try {
+    await spindle.userStorage.setJson(path, snapshot, { indent: 2, userId })
+    const stored = await readStoredJson(path, userId)
+    const parsed = stored.status === 'valid'
+      ? parseChatHistorySnapshotV1(stored.value, { epoch: snapshot.epoch, chatId: snapshot.chatId })
+      : null
+    if (!parsed
+      || parsed.malformedRecordCount > 0
+      || JSON.stringify(parsed.snapshot) !== JSON.stringify(snapshot)
+    ) {
+      throw new Error(`Generation History snapshot ${slot.toUpperCase()} could not be verified after writing.`)
     }
-    return true
+  } catch (error) {
+    // The other slot remains the authoritative snapshot. Remove a failed slot
+    // so a first interrupted write cannot permanently wedge this chat.
+    await spindle.userStorage.delete(path, userId).catch(() => {})
+    throw error
+  }
+}
+
+type PreReleaseHistoryState = {
+  version: 1
+  epoch: number
+}
+
+function isPreReleaseHistoryState(value: unknown): value is PreReleaseHistoryState {
+  const state = value as PreReleaseHistoryState | null
+  return !!state
+    && state.version === 1
+    && Number.isInteger(state.epoch)
+    && state.epoch > 0
+}
+
+async function migratePreReleaseHistoryUnlocked(
+  legacyState: PreReleaseHistoryState,
+  userId?: string,
+): Promise<HistoryStateV1> {
+  const legacyEpoch = legacyState.epoch
+  const recordsByChat = new Map<string, GenerationHistoryRecord[]>()
+  const targetPrefix = `${HISTORY_STORE_PREFIX}/epochs/${legacyEpoch}/targets/`
+  const paths = await spindle.userStorage.list(targetPrefix, userId)
+
+  for (const relativePath of paths) {
+    const stored = await readStoredJson(`${targetPrefix}${relativePath}`, userId)
+    if (stored.status !== 'valid' || !isGenerationHistoryRecord(stored.value)) {
+      spindle.log.warn(`[history] Skipped malformed pre-release record: ${relativePath}`)
+      continue
+    }
+    const record = stored.value
+    if (record.target.historyEpoch !== legacyEpoch) continue
+    const records = recordsByChat.get(record.target.chatId) ?? []
+    const existing = records.find(entry => entry.imageId === record.imageId)
+    if (!existing) records.push(record)
+    else if (!recordMatchesInput(existing, record.target, record)) {
+      spindle.log.warn(`[history] Conflicting pre-release record for image ${record.imageId}; kept the first valid copy.`)
+    }
+    recordsByChat.set(record.target.chatId, records)
   }
 
-  return record.target.swipeId === target.swipeId
-    && record.target.swipeFingerprint === target.swipeFingerprint
+  for (const [chatId, records] of recordsByChat) {
+    records.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
+    const timestamp = Date.now()
+    const snapshot: ChatHistorySnapshotV1 = {
+      schemaVersion: 1,
+      epoch: legacyEpoch,
+      chatId,
+      revision: Math.max(1, records.length),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      records,
+    }
+    await writeAndVerifySnapshot(snapshot, 'a', userId)
+  }
+
+  const state: HistoryStateV1 = { schemaVersion: 1, epoch: legacyEpoch }
+  await writeAndVerifyState(state, userId)
+  if (recordsByChat.size > 0) {
+    spindle.log.info(`[history] Migrated pre-release history into ${recordsByChat.size} compact chat snapshot${recordsByChat.size === 1 ? '' : 's'}.`)
+  }
+  return state
+}
+
+async function loadHistoryStateUnlocked(userId?: string): Promise<HistoryStateV1> {
+  const stored = await readStoredJson(HISTORY_STATE_PATH, userId)
+  if (stored.status === 'valid') {
+    if (isHistoryStateV1(stored.value)) return stored.value
+    if (isPreReleaseHistoryState(stored.value)) {
+      return migratePreReleaseHistoryUnlocked(stored.value, userId)
+    }
+    throw new Error('Generation History state has an unsupported or malformed schema.')
+  }
+  if (stored.status === 'invalid') {
+    throw new Error('Generation History state is corrupt and was not overwritten.')
+  }
+
+  const existingFiles = await spindle.userStorage.list(HISTORY_STORE_PREFIX, userId)
+  if (existingFiles.length > 0) {
+    throw new Error('Generation History files exist without a readable state file and were not overwritten.')
+  }
+
+  const state: HistoryStateV1 = { schemaVersion: 1, epoch: 1 }
+  await writeAndVerifyState(state, userId)
+  return state
+}
+
+function loadHistoryState(userId?: string): Promise<HistoryStateV1> {
+  return withHistoryQueue(userId, () => loadHistoryStateUnlocked(userId))
+}
+
+async function loadChatHistoryUnlocked(
+  chatId: string,
+  epoch: number,
+  userId?: string,
+): Promise<LoadedChatHistory> {
+  const validCandidates: SnapshotCandidate[] = []
+  const invalidSlots: SnapshotSlot[] = []
+
+  for (const slot of ['a', 'b'] as const) {
+    const stored = await readStoredJson(historyChatSnapshotPath(chatId, epoch, slot), userId)
+    if (stored.status === 'absent') continue
+    const parsed = stored.status === 'valid'
+      ? parseChatHistorySnapshotV1(stored.value, { chatId, epoch })
+      : null
+    if (!parsed || parsed.malformedRecordCount > 0) {
+      invalidSlots.push(slot)
+      if (parsed?.malformedRecordCount) {
+        spindle.log.warn(
+          `[history] Snapshot ${slot.toUpperCase()} for chat ${chatId} contains ${parsed.malformedRecordCount} malformed record(s); using a complete alternate snapshot when available.`,
+        )
+      }
+      continue
+    }
+    validCandidates.push({ slot, parsed })
+  }
+
+  const current = selectNewestSnapshot(validCandidates)
+  if (!current && invalidSlots.length > 0) {
+    throw new Error(
+      `No complete Generation History snapshot is readable for this chat (invalid slot${invalidSlots.length === 1 ? '' : 's'}: ${invalidSlots.join(', ')}).`,
+    )
+  }
+  if (current && invalidSlots.length > 0) {
+    spindle.log.warn(`[history] Recovered chat ${chatId} from snapshot ${current.slot.toUpperCase()}; invalid slot: ${invalidSlots.join(', ')}.`)
+  }
+  return { current, validCandidates, invalidSlots }
+}
+
+function sortedTargetHistory(records: GenerationHistoryRecord[], target: GenerationTarget): GenerationHistoryRecord[] {
+  return records
+    .filter(record => recordMatchesTarget(record, target))
+    .sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
 }
 
 async function loadGenerationHistory(target: GenerationTarget, userId?: string): Promise<GenerationHistoryRecord[]> {
-  const state = await loadHistoryState(userId)
-  if (target.historyEpoch !== state.epoch) return []
-
-  const prefix = historyTargetPrefix(target)
-  const paths = await spindle.userStorage.list(prefix, userId)
-  const records: GenerationHistoryRecord[] = []
-  for (let offset = 0; offset < paths.length; offset += 32) {
-    const batch = await Promise.all(paths.slice(offset, offset + 32).map((relativePath: string) =>
-      spindle.userStorage.getJson(`${prefix}${relativePath}`, { fallback: null, userId }) as Promise<GenerationHistoryRecord | null>,
-    ))
-    for (const record of batch) {
-      if (isHistoryRecord(record) && recordMatchesTarget(record, target)) records.push(record)
-    }
-  }
-  records.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
-  return records
+  return withHistoryQueue(userId, async () => {
+    const state = await loadHistoryStateUnlocked(userId)
+    if (target.historyEpoch !== state.epoch) return []
+    const chat = await loadChatHistoryUnlocked(target.chatId, state.epoch, userId)
+    return sortedTargetHistory(chat.current?.parsed.snapshot.records ?? [], target)
+  })
 }
 
 async function appendGenerationHistory(
@@ -166,91 +295,91 @@ async function appendGenerationHistory(
   const settings = await loadSettings(userId)
   if (!settings.generationHistory) return []
 
-  const stateBefore = await loadHistoryState(userId)
-  if (target.historyEpoch !== stateBefore.epoch) return []
+  return withHistoryQueue(userId, async () => {
+    const state = await loadHistoryStateUnlocked(userId)
+    if (target.historyEpoch !== state.epoch) return []
 
-  const canonicalPath = historyImageRecordPath(input.imageId, target.historyEpoch)
-  const existingPointer = await spindle.userStorage.getJson(canonicalPath, {
-    fallback: null,
-    userId,
-  }) as GenerationHistoryPointer | null
-  const existingRecord = isHistoryPointer(existingPointer)
-      && existingPointer.recordPath.startsWith(historyEpochPrefix(target.historyEpoch))
-    ? await spindle.userStorage.getJson(existingPointer.recordPath, { fallback: null, userId }) as GenerationHistoryRecord | null
-    : null
+    const loaded = await loadChatHistoryUnlocked(target.chatId, state.epoch, userId)
+    const current = loaded.current?.parsed.snapshot ?? null
+    if (loaded.current?.parsed.malformedRecordCount) {
+      throw new Error('Generation History contains malformed records and was not rewritten automatically.')
+    }
 
-  const record: GenerationHistoryRecord = isHistoryRecord(existingRecord)
-    ? existingRecord
-    : {
-        version: 1,
-        imageId: input.imageId,
-        createdAt: Date.now(),
-        prompt: input.prompt,
-        negativePrompt: input.negativePrompt,
-        promptMode: input.promptMode,
-        origin: input.origin,
-        provider: input.provider,
-        model: input.model,
-        target,
+    const records = current?.records ?? []
+    const existing = records.find(record => record.imageId === input.imageId)
+    if (existing) {
+      if (!recordMatchesInput(existing, target, input)) {
+        throw new Error(`Generation History integrity conflict for image ${input.imageId}.`)
       }
+      return sortedTargetHistory(records, target)
+    }
 
-  const targetPath = historyTargetRecordPath(record)
-  const pointer: GenerationHistoryPointer = {
-    version: 1,
-    imageId: record.imageId,
-    createdAt: record.createdAt,
-    recordPath: targetPath,
-  }
-  // Store the full prompt once. The image-ID index is a small pointer used by
-  // Prompt View, avoiding a second copy of every potentially long prompt.
-  await spindle.userStorage.setJson(targetPath, record, { indent: 2, userId })
-  await spindle.userStorage.setJson(canonicalPath, pointer, { indent: 2, userId })
+    const record = createHistoryRecord(target, input)
+    const next = appendRecordToSnapshot(current, record)
+    const targetSlot: SnapshotSlot = loaded.current?.slot === 'a' ? 'b' : 'a'
+    await writeAndVerifySnapshot(next, targetSlot, userId)
 
-  // A clear can race an in-flight generation from another device. Re-check
-  // the epoch after writing and remove the stale files if the clear won.
-  const stateAfter = await loadHistoryState(userId)
-  if (stateAfter.epoch !== target.historyEpoch) {
-    await spindle.userStorage.delete(canonicalPath, userId).catch(() => {})
-    await spindle.userStorage.delete(targetPath, userId).catch(() => {})
-    return []
-  }
-
-  return loadGenerationHistory(target, userId)
+    const stateAfter = await loadHistoryStateUnlocked(userId)
+    if (stateAfter.epoch !== target.historyEpoch) return []
+    return sortedTargetHistory(next.records, target)
+  })
 }
 
-async function getGenerationRecord(imageId: string, userId?: string): Promise<GenerationHistoryRecord | null> {
-  const state = await loadHistoryState(userId)
-  const pointer = await spindle.userStorage.getJson(historyImageRecordPath(imageId, state.epoch), {
-    fallback: null,
-    userId,
-  }) as GenerationHistoryPointer | null
-  if (!isHistoryPointer(pointer) || !pointer.recordPath.startsWith(historyEpochPrefix(state.epoch))) return null
-  const record = await spindle.userStorage.getJson(pointer.recordPath, { fallback: null, userId }) as GenerationHistoryRecord | null
-  return isHistoryRecord(record) && record.target.historyEpoch === state.epoch ? record : null
+async function getGenerationRecord(
+  chatId: string,
+  imageId: string,
+  userId?: string,
+): Promise<GenerationHistoryRecord | null> {
+  return withHistoryQueue(userId, async () => {
+    const state = await loadHistoryStateUnlocked(userId)
+    const loaded = await loadChatHistoryUnlocked(chatId, state.epoch, userId)
+    return loaded.current?.parsed.snapshot.records.find(record =>
+      record.imageId === imageId && record.target.historyEpoch === state.epoch
+    ) ?? null
+  })
+}
+
+async function highestStoredHistoryEpochUnlocked(userId?: string): Promise<number> {
+  let highest = 0
+
+  const state = await readStoredJson(HISTORY_STATE_PATH, userId)
+  if (state.status === 'valid') {
+    if (isHistoryStateV1(state.value) || isPreReleaseHistoryState(state.value)) {
+      highest = Math.max(highest, state.value.epoch)
+    }
+  }
+
+  const paths = await spindle.userStorage.list(`${HISTORY_STORE_PREFIX}/epochs/`, userId)
+  for (const relativePath of paths) {
+    const epoch = Number.parseInt(relativePath.split('/')[0] ?? '', 10)
+    if (Number.isInteger(epoch) && epoch > highest) highest = epoch
+  }
+
+  return highest
 }
 
 async function clearGenerationHistory(userId?: string): Promise<void> {
-  const current = await loadHistoryState(userId)
-  const next: HistoryState = { version: 1, epoch: current.epoch + 1 }
+  await withHistoryQueue(userId, async () => {
+    // Clear is an explicit destructive recovery operation. It must still work
+    // when either the current or pre-release state file is malformed.
+    const highestEpoch = await highestStoredHistoryEpochUnlocked(userId)
+    const next: HistoryStateV1 = { schemaVersion: 1, epoch: Math.max(1, highestEpoch + 1) }
 
-  // Publish the new epoch first. Any old in-flight generation now fails its
-  // post-write epoch check, while a genuinely new generation writes beneath
-  // the new epoch and is not swept by this clear operation.
-  await spindle.userStorage.setJson(HISTORY_STATE_PATH, next, { indent: 2, userId })
-  const epochsPrefix = `${HISTORY_PREFIX}/epochs/`
-  const paths = await spindle.userStorage.list(epochsPrefix, userId)
-  const stalePaths = paths.filter((relativePath: string) => {
-    const storedEpoch = Number.parseInt(relativePath.split('/')[0] ?? '', 10)
-    // Delete only epochs that existed before this clear began. A concurrent
-    // clear may already have advanced the state again; its newer epoch must
-    // never be swept by this operation.
-    return Number.isFinite(storedEpoch) && storedEpoch <= current.epoch
+    // Publish and verify the new epoch first. Everything beneath previous
+    // epochs immediately becomes inaccessible, even if cleanup is interrupted.
+    await writeAndVerifyState(next, userId)
+
+    const epochsPrefix = `${HISTORY_STORE_PREFIX}/epochs/`
+    const paths = await spindle.userStorage.list(epochsPrefix, userId)
+    const staleEpochs = new Set<number>()
+    for (const relativePath of paths) {
+      const storedEpoch = Number.parseInt(relativePath.split('/')[0] ?? '', 10)
+      if (Number.isInteger(storedEpoch) && storedEpoch < next.epoch) staleEpochs.add(storedEpoch)
+    }
+    for (const epoch of staleEpochs) {
+      await spindle.userStorage.delete(historyEpochPrefix(epoch), userId).catch(() => {})
+    }
   })
-  for (let offset = 0; offset < stalePaths.length; offset += 32) {
-    await Promise.all(stalePaths.slice(offset, offset + 32).map((relativePath: string) =>
-      spindle.userStorage.delete(`${epochsPrefix}${relativePath}`, userId).catch(() => {}),
-    ))
-  }
 }
 
 // ── Image manipulation ──
@@ -413,11 +542,19 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
         }
         const messages = await spindle.chat.getMessages(payload.chatId) as ShutterMessage[]
         const { target: message, error } = resolveTarget(messages, payload.messageId)
-        const state = await loadHistoryState(userId)
+        let historyEpoch = 1
+        try {
+          historyEpoch = (await loadHistoryState(userId)).epoch
+        } catch (historyError) {
+          // History corruption must not disable Shutter's core generation and
+          // exact-message targeting. History operations will continue to fail
+          // safely until the user clears or repairs the stored metadata.
+          spindle.log.warn(`[history] Target resolved without readable history state: ${historyError instanceof Error ? historyError.message : String(historyError)}`)
+        }
         spindle.sendToFrontend({
           type: 'generation_target',
           requestId: payload.requestId,
-          target: message ? buildGenerationTarget(payload.chatId, message, state.epoch) : null,
+          target: message ? buildGenerationTarget(payload.chatId, message, historyEpoch) : null,
           error,
         }, userId)
         break
@@ -436,7 +573,7 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
       }
 
       case 'get_generation_record': {
-        const record = await getGenerationRecord(payload.imageId, userId)
+        const record = await getGenerationRecord(payload.chatId, payload.imageId, userId)
         spindle.sendToFrontend({ type: 'generation_record', requestId: payload.requestId, record }, userId)
         break
       }
@@ -617,9 +754,22 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
         break
       }
     }
-  } catch (err: any) {
+  } catch (error) {
     const msgType = (payload && typeof payload === 'object' && 'type' in payload) ? (payload as { type: string }).type : 'unknown'
-    spindle.log.error(`[${msgType}] ${err.message}`)
+    const message = error instanceof Error ? error.message : String(error)
+    spindle.log.error(`[${msgType}] ${message}`)
+    const requestId = payload && typeof payload === 'object' && 'requestId' in payload
+      && typeof (payload as { requestId?: unknown }).requestId === 'string'
+        ? (payload as { requestId: string }).requestId
+        : null
+    if (requestId) {
+      spindle.sendToFrontend({
+        type: 'request_failed',
+        requestId,
+        operation: msgType,
+        error: message,
+      }, userId)
+    }
   }
 })
 

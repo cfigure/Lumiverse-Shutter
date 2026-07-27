@@ -481,9 +481,11 @@ export function createLightboxPromptLabel(deps: {
     // the shell → prompt swap without any destroy/remount or rewiring.
     function bodyContentHtml(view: PromptMetadataView, sources: PromptSources): string {
       const selector = sources.shutter && sources.embedded
-        ? `<div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
-            <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
-            <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
+        ? `<div class="sh-lightbox-prompt-source-row">
+            <div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
+              <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
+              <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
+            </div>
           </div>`
         : ''
       const details = formatPromptMetadataLine(view)
@@ -1108,7 +1110,7 @@ export function createLightboxPromptLabel(deps: {
     // lightbox's image download on constrained mobile connections.
     const recordPromise = tagPromise.then(tag => {
       const imageId = tag?.imageId ?? clickedId
-      return imageId ? comms.getGenerationRecord(imageId) : Promise.resolve(null)
+      return imageId && chatId ? comms.getGenerationRecord(chatId, imageId) : Promise.resolve(null)
     })
     const historyPromise = recordPromise.then(record =>
       record ? comms.getGenerationHistory(record.target) : Promise.resolve([] as GenerationHistoryRecord[])

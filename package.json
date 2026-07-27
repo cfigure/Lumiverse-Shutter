@@ -1,11 +1,15 @@
 {
   "name": "shutter",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts --outdir dist --target browser",
-    "typecheck": "tsc --noEmit"
+    "build:portable": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/build.mjs && node --test tests/*.test.mjs",
+    "verify": "tsc --noEmit && bun run build && node --check dist/frontend.js && node --check dist/backend.js && node --test tests/*.test.mjs",
+    "typecheck:offline": "tsc -p tsconfig.offline.json --noEmit"
   },
   "devDependencies": {
     "lumiverse-spindle-types": "^0.6.5",

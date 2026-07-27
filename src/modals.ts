@@ -317,7 +317,7 @@ export function createModals(deps: {
     return btn
   }
 
-  // ── Durable generation history (1.0.7) ──
+  // ── Durable generation history (1.1.0) ──
   //
   // The backend/userStorage record is authoritative. The modal receives the
   // complete history for the pinned message swipe, so a fresh widget press,
@@ -569,6 +569,7 @@ export function createModals(deps: {
     let promptRenderToken = 0
 
     const closeCurrentSurface = () => {
+      if (committing) return
       if (surface === 'prompt') renderHistorySurface()
       else modal.dismiss()
     }
@@ -579,6 +580,7 @@ export function createModals(deps: {
     const previewWrap = document.createElement('div')
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
+    preview.alt = 'Selected Shutter generation'
     preview.addEventListener('click', () => openLightbox(imageUrlForHistoryRecord(current())))
     previewWrap.appendChild(preview)
 
@@ -591,8 +593,10 @@ export function createModals(deps: {
     prev.className = next.className = 'sh-hist-btn'
     prev.title = 'Previous generation'
     next.title = 'Next generation'
-    prev.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
-    next.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
+    prev.setAttribute('aria-label', 'Previous generation')
+    next.setAttribute('aria-label', 'Next generation')
+    prev.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
+    next.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
     const count = document.createElement('span')
     count.className = 'sh-hist-counter'
     nav.append(prev, count, next)
@@ -674,14 +678,15 @@ export function createModals(deps: {
         // exact tag, not whichever Shutter image happens to be last now.
         replaceImageId: replace ? initialImageId : undefined,
       })
-      if (!modal.root.isConnected) return
       if (!result.success || !result.changed) {
-        setCommitDisabled(false)
-        render()
+        if (modal.root.isConnected) {
+          setCommitDisabled(false)
+          render()
+        }
         return
       }
 
-      modal.dismiss()
+      if (modal.root.isConnected) modal.dismiss()
       closeParentPrompt?.()
       closeUnderlyingLightbox?.()
     }
@@ -723,12 +728,14 @@ export function createModals(deps: {
     prev.addEventListener('click', event => { event.stopPropagation(); step(-1) })
     next.addEventListener('click', event => { event.stopPropagation(); step(1) })
     const arrowHandler = (event: KeyboardEvent) => {
-      if (surface !== 'history') return
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-      if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target)) return
-      event.preventDefault()
+      if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox) return
+      // Always isolate arrows while this logical modal is foregrounded. The
+      // child Image Prompt surface does not navigate, but Lumiverse must not
+      // swipe the underlying chat behind it.
+      if (!isEditableTarget(event.target)) event.preventDefault()
       event.stopImmediatePropagation()
-      step(event.key === 'ArrowLeft' ? -1 : 1)
+      if (surface === 'history' && !committing) step(event.key === 'ArrowLeft' ? -1 : 1)
     }
     window.addEventListener('keydown', arrowHandler, { capture: true })
 
@@ -836,7 +843,7 @@ export function createModals(deps: {
       }
 
       const [record, embedded] = await Promise.all([
-        comms.getGenerationRecord(tag.imageId),
+        comms.getGenerationRecord(chatId, tag.imageId),
         resolveEmbeddedPromptForImage(tag, tag.path),
       ])
       const history = record ? await comms.getGenerationHistory(record.target) : []

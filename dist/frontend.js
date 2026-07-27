@@ -1,564 +1,6 @@
-// Generated bundle for Lumiverse Shutter 1.0.7.
-const __modules = Object.create(null);
-
-__modules["./backend"] = function(module, exports, require) {
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const settings_1 = require("./settings");
-const history_1 = require("./history");
-// Current settings used by backend features that run outside a frontend action.
-let liveSettings = { ...settings_1.DEFAULT_SETTINGS };
-// ── Storage ──
-async function loadSettings(userId) {
-    const saved = await spindle.userStorage.getJson('settings.json', { fallback: {}, userId });
-    return (0, settings_1.validateSettings)({ ...settings_1.DEFAULT_SETTINGS, ...saved });
-}
-async function saveSettings(patch, userId) {
-    const current = await loadSettings(userId);
-    const merged = (0, settings_1.validateSettings)({ ...current, ...patch });
-    await spindle.userStorage.setJson('settings.json', merged, { indent: 2, userId });
-    return merged;
-}
-void loadSettings()
-    .then(settings => {
-    liveSettings = settings;
-})
-    .catch(error => {
-    spindle.log.warn(`[settings] Failed to load saved settings; using defaults: ${error instanceof Error ? error.message : String(error)}`);
-});
-// ── Durable generation history ──
-const HISTORY_PREFIX = 'history/v1';
-const HISTORY_STATE_PATH = `${HISTORY_PREFIX}/state.json`;
-function safePathSegment(value) {
-    return value.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-function historyEpochPrefix(epoch) {
-    return `${HISTORY_PREFIX}/epochs/${epoch}/`;
-}
-function historyTargetPrefix(target) {
-    return `${historyEpochPrefix(target.historyEpoch)}targets/${safePathSegment(target.chatId)}/${safePathSegment(target.messageId)}/`;
-}
-function historyTargetRecordPath(record) {
-    return `${historyTargetPrefix(record.target)}${record.createdAt}-${safePathSegment(record.imageId)}.json`;
-}
-function historyImageRecordPath(imageId, epoch) {
-    return `${historyEpochPrefix(epoch)}records/${safePathSegment(imageId)}.json`;
-}
-async function loadHistoryState(userId) {
-    const state = await spindle.userStorage.getJson(HISTORY_STATE_PATH, {
-        fallback: { version: 1, epoch: 1 },
-        userId,
-    });
-    const epoch = Number.isFinite(state?.epoch) && state.epoch > 0 ? Math.floor(state.epoch) : 1;
-    return { version: 1, epoch };
-}
-function isHistoryRecord(value) {
-    const record = value;
-    return !!record
-        && record.version === 1
-        && typeof record.imageId === 'string'
-        && typeof record.createdAt === 'number'
-        && typeof record.prompt === 'string'
-        && typeof record.negativePrompt === 'string'
-        && typeof record.promptMode === 'string'
-        && (record.provider === undefined || typeof record.provider === 'string')
-        && (record.model === undefined || typeof record.model === 'string')
-        && !!record.target
-        && typeof record.target.chatId === 'string'
-        && typeof record.target.messageId === 'string';
-}
-function isHistoryPointer(value) {
-    const pointer = value;
-    return !!pointer
-        && pointer.version === 1
-        && typeof pointer.imageId === 'string'
-        && typeof pointer.createdAt === 'number'
-        && typeof pointer.recordPath === 'string';
-}
-function recordMatchesTarget(record, target) {
-    if (record.target.historyEpoch !== target.historyEpoch)
-        return false;
-    if (record.target.chatId !== target.chatId || record.target.messageId !== target.messageId)
-        return false;
-    if (record.target.swipeDate !== null && target.swipeDate !== null) {
-        if (record.target.swipeDate !== target.swipeDate)
-            return false;
-        // Timestamps are normally unique. When either side observed a duplicate,
-        // use the stripped-content fingerprint to avoid merging two same-second swipes.
-        if (record.target.duplicateSwipeDate || target.duplicateSwipeDate) {
-            return record.target.swipeFingerprint === target.swipeFingerprint;
-        }
-        return true;
-    }
-    return record.target.swipeId === target.swipeId
-        && record.target.swipeFingerprint === target.swipeFingerprint;
-}
-async function loadGenerationHistory(target, userId) {
-    const state = await loadHistoryState(userId);
-    if (target.historyEpoch !== state.epoch)
-        return [];
-    const prefix = historyTargetPrefix(target);
-    const paths = await spindle.userStorage.list(prefix, userId);
-    const records = [];
-    for (let offset = 0; offset < paths.length; offset += 32) {
-        const batch = await Promise.all(paths.slice(offset, offset + 32).map((relativePath) => spindle.userStorage.getJson(`${prefix}${relativePath}`, { fallback: null, userId })));
-        for (const record of batch) {
-            if (isHistoryRecord(record) && recordMatchesTarget(record, target))
-                records.push(record);
-        }
-    }
-    records.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId));
-    return records;
-}
-async function appendGenerationHistory(target, input, userId) {
-    const settings = await loadSettings(userId);
-    if (!settings.generationHistory)
-        return [];
-    const stateBefore = await loadHistoryState(userId);
-    if (target.historyEpoch !== stateBefore.epoch)
-        return [];
-    const canonicalPath = historyImageRecordPath(input.imageId, target.historyEpoch);
-    const existingPointer = await spindle.userStorage.getJson(canonicalPath, {
-        fallback: null,
-        userId,
-    });
-    const existingRecord = isHistoryPointer(existingPointer)
-        && existingPointer.recordPath.startsWith(historyEpochPrefix(target.historyEpoch))
-        ? await spindle.userStorage.getJson(existingPointer.recordPath, { fallback: null, userId })
-        : null;
-    const record = isHistoryRecord(existingRecord)
-        ? existingRecord
-        : {
-            version: 1,
-            imageId: input.imageId,
-            createdAt: Date.now(),
-            prompt: input.prompt,
-            negativePrompt: input.negativePrompt,
-            promptMode: input.promptMode,
-            origin: input.origin,
-            provider: input.provider,
-            model: input.model,
-            target,
-        };
-    const targetPath = historyTargetRecordPath(record);
-    const pointer = {
-        version: 1,
-        imageId: record.imageId,
-        createdAt: record.createdAt,
-        recordPath: targetPath,
-    };
-    // Store the full prompt once. The image-ID index is a small pointer used by
-    // Prompt View, avoiding a second copy of every potentially long prompt.
-    await spindle.userStorage.setJson(targetPath, record, { indent: 2, userId });
-    await spindle.userStorage.setJson(canonicalPath, pointer, { indent: 2, userId });
-    // A clear can race an in-flight generation from another device. Re-check
-    // the epoch after writing and remove the stale files if the clear won.
-    const stateAfter = await loadHistoryState(userId);
-    if (stateAfter.epoch !== target.historyEpoch) {
-        await spindle.userStorage.delete(canonicalPath, userId).catch(() => { });
-        await spindle.userStorage.delete(targetPath, userId).catch(() => { });
-        return [];
-    }
-    return loadGenerationHistory(target, userId);
-}
-async function getGenerationRecord(imageId, userId) {
-    const state = await loadHistoryState(userId);
-    const pointer = await spindle.userStorage.getJson(historyImageRecordPath(imageId, state.epoch), {
-        fallback: null,
-        userId,
-    });
-    if (!isHistoryPointer(pointer) || !pointer.recordPath.startsWith(historyEpochPrefix(state.epoch)))
-        return null;
-    const record = await spindle.userStorage.getJson(pointer.recordPath, { fallback: null, userId });
-    return isHistoryRecord(record) && record.target.historyEpoch === state.epoch ? record : null;
-}
-async function clearGenerationHistory(userId) {
-    const current = await loadHistoryState(userId);
-    const next = { version: 1, epoch: current.epoch + 1 };
-    // Publish the new epoch first. Any old in-flight generation now fails its
-    // post-write epoch check, while a genuinely new generation writes beneath
-    // the new epoch and is not swept by this clear operation.
-    await spindle.userStorage.setJson(HISTORY_STATE_PATH, next, { indent: 2, userId });
-    const epochsPrefix = `${HISTORY_PREFIX}/epochs/`;
-    const paths = await spindle.userStorage.list(epochsPrefix, userId);
-    const stalePaths = paths.filter((relativePath) => {
-        const storedEpoch = Number.parseInt(relativePath.split('/')[0] ?? '', 10);
-        // Delete only epochs that existed before this clear began. A concurrent
-        // clear may already have advanced the state again; its newer epoch must
-        // never be swept by this operation.
-        return Number.isFinite(storedEpoch) && storedEpoch <= current.epoch;
-    });
-    for (let offset = 0; offset < stalePaths.length; offset += 32) {
-        await Promise.all(stalePaths.slice(offset, offset + 32).map((relativePath) => spindle.userStorage.delete(`${epochsPrefix}${relativePath}`, userId).catch(() => { })));
-    }
-}
-// ── Image manipulation ──
-// The 'Remove Image Tags from Context' setting controls whether these tags are stripped from
-// the prompt natively via the interceptor below. Shutter-regex-scripts.json is
-// the legacy equivalent (same unanchored 'gi' pattern) for installs on a
-// Lumiverse old enough to lack the 'interceptor' permission; keep them in sync.
-const SHUTTER_IMAGE_SOURCE = String.raw `\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/[a-f0-9-]+\)`;
-const SHUTTER_IMAGE_RE = new RegExp(`${SHUTTER_IMAGE_SOURCE}$`, 'i');
-const SHUTTER_IMAGE_GLOBAL_RE = new RegExp(SHUTTER_IMAGE_SOURCE, 'gi');
-function stripLastShutterImage(content) {
-    const match = content.match(SHUTTER_IMAGE_RE);
-    if (!match)
-        return { content, found: false };
-    return { content: content.slice(0, match.index), found: true };
-}
-function shutterImageIdPattern(imageId) {
-    const escaped = imageId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(String.raw `\n*!\[shutter\]\(/api/v1/(?:images|image-gen/results)/${escaped}\)`, 'i');
-}
-function stripShutterImageById(content, imageId) {
-    const re = shutterImageIdPattern(imageId);
-    if (!re.test(content))
-        return { content, found: false };
-    return { content: content.replace(re, ''), found: true };
-}
-function containsShutterImageId(content, imageId) {
-    return shutterImageIdPattern(imageId).test(content);
-}
-function stripAllShutterImages(content) {
-    let count = 0;
-    const stripped = content.replace(SHUTTER_IMAGE_GLOBAL_RE, () => { count++; return ''; });
-    return { content: stripped, count };
-}
-function stripShutterFromLlmMessage(message) {
-    const { content } = message;
-    if (typeof content === 'string') {
-        return { ...message, content: content.replace(SHUTTER_IMAGE_GLOBAL_RE, '') };
-    }
-    return {
-        ...message,
-        content: content.map((part) => part.type === 'text'
-            ? { ...part, text: part.text.replace(SHUTTER_IMAGE_GLOBAL_RE, '') }
-            : part),
-    };
-}
-function orderedMessages(messages) {
-    return [...messages].sort((a, b) => a.index_in_chat - b.index_in_chat);
-}
-function resolveTarget(messages, messageId) {
-    if (messageId === '__last__') {
-        const ordered = orderedMessages(messages);
-        const target = ordered[ordered.length - 1];
-        return target ? { target } : { error: 'No messages in chat.' };
-    }
-    const target = messages.find(m => m.id === messageId);
-    return target ? { target } : { error: 'Message not found.' };
-}
-function buildGenerationTarget(chatId, message, historyEpoch) {
-    const swipeId = Number.isFinite(message.swipe_id) ? message.swipe_id : 0;
-    const swipeContent = message.swipes?.[swipeId] ?? message.content;
-    const rawDate = message.swipe_dates?.[swipeId];
-    const swipeDate = Number.isFinite(rawDate) && rawDate > 0 ? rawDate : null;
-    const duplicateSwipeDate = swipeDate !== null
-        && message.swipe_dates.filter(value => value === swipeDate).length > 1;
-    return {
-        chatId,
-        messageId: message.id,
-        swipeId,
-        swipeDate,
-        swipeFingerprint: (0, history_1.fingerprintSwipeContent)(swipeContent),
-        duplicateSwipeDate,
-        historyEpoch,
-    };
-}
-function resolvePinnedSwipeIndex(message, target) {
-    const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.content];
-    const dates = Array.isArray(message.swipe_dates) ? message.swipe_dates : [];
-    if (target.swipeDate !== null) {
-        const candidates = [];
-        for (let i = 0; i < dates.length; i++)
-            if (dates[i] === target.swipeDate)
-                candidates.push(i);
-        if (candidates.length === 1)
-            return candidates[0];
-        if (candidates.length > 1) {
-            const byFingerprint = candidates.filter(i => (0, history_1.fingerprintSwipeContent)(swipes[i] ?? '') === target.swipeFingerprint);
-            if (byFingerprint.length === 1)
-                return byFingerprint[0];
-        }
-    }
-    if (target.swipeId >= 0 && target.swipeId < swipes.length) {
-        const content = swipes[target.swipeId] ?? '';
-        if ((0, history_1.fingerprintSwipeContent)(content) === target.swipeFingerprint)
-            return target.swipeId;
-    }
-    return null;
-}
-// ── Frontend messages ──
-spindle.onFrontendMessage(async (raw, userId) => {
-    const payload = raw;
-    try {
-        switch (payload.type) {
-            case 'request_settings': {
-                const settings = await loadSettings(userId);
-                liveSettings = settings;
-                spindle.sendToFrontend({ type: 'settings', settings }, userId);
-                break;
-            }
-            case 'update_settings': {
-                const settings = await saveSettings(payload.settings, userId);
-                liveSettings = settings;
-                spindle.sendToFrontend({ type: 'settings', settings }, userId);
-                break;
-            }
-            case 'show_toast': {
-                spindle.toast[payload.level](payload.message, { userId });
-                break;
-            }
-            case 'resolve_generation_target': {
-                if (!spindle.permissions.has('chat_mutation')) {
-                    spindle.sendToFrontend({
-                        type: 'generation_target',
-                        requestId: payload.requestId,
-                        target: null,
-                        error: 'Grant the "Chat Mutation" permission to resolve chat messages.',
-                    }, userId);
-                    break;
-                }
-                const messages = await spindle.chat.getMessages(payload.chatId);
-                const { target: message, error } = resolveTarget(messages, payload.messageId);
-                const state = await loadHistoryState(userId);
-                spindle.sendToFrontend({
-                    type: 'generation_target',
-                    requestId: payload.requestId,
-                    target: message ? buildGenerationTarget(payload.chatId, message, state.epoch) : null,
-                    error,
-                }, userId);
-                break;
-            }
-            case 'append_generation_history': {
-                const history = await appendGenerationHistory(payload.target, payload.entry, userId);
-                spindle.sendToFrontend({ type: 'generation_history', requestId: payload.requestId, history }, userId);
-                break;
-            }
-            case 'get_generation_history': {
-                const history = await loadGenerationHistory(payload.target, userId);
-                spindle.sendToFrontend({ type: 'generation_history', requestId: payload.requestId, history }, userId);
-                break;
-            }
-            case 'get_generation_record': {
-                const record = await getGenerationRecord(payload.imageId, userId);
-                spindle.sendToFrontend({ type: 'generation_record', requestId: payload.requestId, record }, userId);
-                break;
-            }
-            case 'clear_generation_history': {
-                await clearGenerationHistory(userId);
-                spindle.sendToFrontend({ type: 'history_cleared', requestId: payload.requestId }, userId);
-                spindle.sendToFrontend({ type: 'generation_history_cleared' }, userId);
-                break;
-            }
-            case 'resolve_shutter_tag': {
-                let imageId = null;
-                let path = null;
-                try {
-                    if (spindle.permissions.has('chat_mutation')) {
-                        const messages = await spindle.chat.getMessages(payload.chatId);
-                        const { target: message } = resolveTarget(messages, payload.messageId);
-                        if (message && typeof message.content === 'string') {
-                            const tagRe = new RegExp(String.raw `!\[shutter\]\((/api/v1/(?:images|image-gen/results)/([a-f0-9-]+))\)`, 'gi');
-                            const tags = [];
-                            let match;
-                            while ((match = tagRe.exec(message.content)) !== null) {
-                                tags.push({ path: match[1], imageId: match[2] });
-                            }
-                            const tag = payload.index < 0
-                                ? (tags[tags.length + payload.index] ?? null)
-                                : (tags[payload.index] ?? tags[0] ?? null);
-                            if (tag) {
-                                imageId = tag.imageId;
-                                path = tag.path;
-                            }
-                        }
-                    }
-                }
-                catch (err) {
-                    spindle.log.warn(`[lightbox] resolve_shutter_tag failed: ${err instanceof Error ? err.message : String(err)}`);
-                }
-                spindle.sendToFrontend({ type: 'shutter_tag', requestId: payload.requestId, imageId, path }, userId);
-                break;
-            }
-            case 'insert_into_message': {
-                const reply = (success, changed, reason) => {
-                    if (!payload.requestId)
-                        return;
-                    spindle.sendToFrontend({
-                        type: 'insert_result',
-                        requestId: payload.requestId,
-                        success,
-                        changed,
-                        reason,
-                    }, userId);
-                };
-                if (!spindle.permissions.has('chat_mutation')) {
-                    spindle.toast.warning('Grant the "Chat Mutation" permission to insert images into messages.', { userId });
-                    reply(false, false, 'permission');
-                    break;
-                }
-                try {
-                    const messages = await spindle.chat.getMessages(payload.chatId);
-                    const requestedId = payload.target?.messageId ?? payload.messageId;
-                    const { target: message, error } = resolveTarget(messages, requestedId);
-                    if (!message) {
-                        spindle.toast.error(error || 'Message not found.', { userId });
-                        reply(false, false, 'target_missing');
-                        break;
-                    }
-                    const swipeIndex = payload.target ? resolvePinnedSwipeIndex(message, payload.target) : message.swipe_id;
-                    if (swipeIndex === null || swipeIndex < 0 || swipeIndex >= message.swipes.length) {
-                        spindle.toast.error('The message response used for this generation no longer exists.', { userId });
-                        reply(false, false, 'target_missing');
-                        break;
-                    }
-                    const imageUrl = `/api/v1/image-gen/results/${payload.imageId}`;
-                    let baseContent = message.swipes[swipeIndex] ?? message.content;
-                    let didReplace = false;
-                    // Guard before mutation so rejected replacements remain atomic.
-                    if (payload.replace) {
-                        const targetId = payload.replaceImageId;
-                        if (targetId && !containsShutterImageId(baseContent, targetId)) {
-                            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
-                            reply(false, false, 'target_missing');
-                            break;
-                        }
-                        if (targetId && targetId === payload.imageId) {
-                            spindle.toast.info('This image is already in that position.', { userId });
-                            reply(false, false, 'same_image');
-                            break;
-                        }
-                        if (containsShutterImageId(baseContent, payload.imageId)) {
-                            spindle.toast.info('That image is already in this response, so nothing was replaced.', { userId });
-                            reply(false, false, 'duplicate');
-                            break;
-                        }
-                        const stripped = targetId
-                            ? stripShutterImageById(baseContent, targetId)
-                            : stripLastShutterImage(baseContent);
-                        if (!stripped.found) {
-                            spindle.toast.error('The image selected for replacement is no longer in that message response.', { userId });
-                            reply(false, false, 'target_missing');
-                            break;
-                        }
-                        baseContent = stripped.content;
-                        didReplace = true;
-                    }
-                    else if (containsShutterImageId(baseContent, payload.imageId)) {
-                        spindle.log.info(`[insert_into_message] skipped duplicate image insert for ${payload.imageId}`);
-                        spindle.toast.info('That image is already in this response.', { userId });
-                        reply(false, false, 'duplicate');
-                        break;
-                    }
-                    baseContent += `
-
-![shutter](${imageUrl})`;
-                    const swipes = [...message.swipes];
-                    swipes[swipeIndex] = baseContent;
-                    await spindle.chat.updateMessage(payload.chatId, message.id, {
-                        swipes,
-                        swipe_dates: [...message.swipe_dates],
-                        swipe_id: message.swipe_id,
-                    });
-                    const settings = await loadSettings(userId);
-                    if (settings.toastOnInsert) {
-                        spindle.toast.success(didReplace ? 'Image replaced.' : 'Image inserted into message.', { userId });
-                    }
-                    reply(true, true);
-                }
-                catch (err) {
-                    spindle.log.error(`[insert_into_message] ${err instanceof Error ? err.message : String(err)}`);
-                    reply(false, false, 'failed');
-                }
-                break;
-            }
-            case 'delete_image': {
-                if (!spindle.permissions.has('chat_mutation')) {
-                    spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId });
-                    return;
-                }
-                const messages = await spindle.chat.getMessages(payload.chatId);
-                const { target, error } = resolveTarget(messages, payload.messageId);
-                if (!target) {
-                    spindle.toast.error(error || 'Message not found.', { userId });
-                    return;
-                }
-                const stripped = stripLastShutterImage(target.content);
-                if (!stripped.found) {
-                    spindle.toast.warning('No Shutter image found in message.', { userId });
-                    return;
-                }
-                await spindle.chat.updateMessage(payload.chatId, target.id, { content: stripped.content });
-                spindle.toast.success('Image removed from message.', { userId });
-                break;
-            }
-            case 'delete_all_images': {
-                if (!spindle.permissions.has('chat_mutation')) {
-                    spindle.toast.warning('Grant the "Chat Mutation" permission to remove images from messages.', { userId });
-                    return;
-                }
-                const messages = await spindle.chat.getMessages(payload.chatId);
-                const { target, error } = resolveTarget(messages, payload.messageId);
-                if (!target) {
-                    spindle.toast.error(error || 'Message not found.', { userId });
-                    return;
-                }
-                const stripped = stripAllShutterImages(target.content);
-                if (stripped.count === 0) {
-                    spindle.toast.warning('No Shutter images found in message.', { userId });
-                    return;
-                }
-                await spindle.chat.updateMessage(payload.chatId, target.id, { content: stripped.content });
-                spindle.toast.success(`Removed ${stripped.count} image${stripped.count > 1 ? 's' : ''} from message.`, { userId });
-                break;
-            }
-        }
-    }
-    catch (err) {
-        const msgType = (payload && typeof payload === 'object' && 'type' in payload) ? payload.type : 'unknown';
-        spindle.log.error(`[${msgType}] ${err.message}`);
-    }
-});
-// ── Image-tag context interceptor ──
-let imageTagInterceptorRegistered = false;
-function ensureImageTagInterceptor() {
-    if (imageTagInterceptorRegistered || !spindle.permissions.has('interceptor'))
-        return;
-    spindle.registerInterceptor(async (messages) => {
-        if (!liveSettings.removeImageTagsFromContext)
-            return messages;
-        return messages.map(stripShutterFromLlmMessage);
-    });
-    imageTagInterceptorRegistered = true;
-    spindle.log.info('[context-tags] Image-tag interceptor registered.');
-}
-ensureImageTagInterceptor();
-spindle.permissions.onChanged(({ permission, granted }) => {
-    if (permission !== 'interceptor')
-        return;
-    if (granted) {
-        ensureImageTagInterceptor();
-    }
-    else {
-        imageTagInterceptorRegistered = false;
-        spindle.log.warn('[context-tags] "interceptor" permission revoked; Shutter image tags will remain in context.');
-    }
-});
-spindle.permissions.onDenied(({ permission, operation }) => {
-    if (permission !== 'interceptor' || operation !== 'registerInterceptor')
-        return;
-    imageTagInterceptorRegistered = false;
-    spindle.log.warn('[context-tags] Image-tag interceptor registration was denied.');
-});
-if (!spindle.permissions.has('interceptor')) {
-    spindle.log.warn('[context-tags] "interceptor" permission not granted; Shutter image tags will remain in context.');
-}
-spindle.log.info('Shutter loaded!');
-
-
-};
-__modules["./comms"] = function(module, exports, require) {
+// Shutter 1.1.0 — generated by scripts/build.mjs
+const __modules = {
+"comms": function(require, module, exports) {
 "use strict";
 // Spindle message-channel round-trips, correlated by requestId with timeout
 // fallbacks. The entry owns the single ctx.onBackendMessage subscription.
@@ -573,7 +15,7 @@ function createComms(ctx) {
                 pending.delete(requestId);
                 resolve(fallback);
             }, timeoutMs);
-            pending.set(requestId, { kind, resolve, timeout });
+            pending.set(requestId, { kind, resolve, fallback, timeout });
             ctx.sendToBackend({ type, requestId, ...payload });
         });
     }
@@ -589,8 +31,8 @@ function createComms(ctx) {
     function getGenerationHistory(target) {
         return request('history', 'get_generation_history', { target }, []);
     }
-    function getGenerationRecord(imageId) {
-        return request('record', 'get_generation_record', { imageId }, null);
+    function getGenerationRecord(chatId, imageId) {
+        return request('record', 'get_generation_record', { chatId, imageId }, null);
     }
     function clearGenerationHistory() {
         return request('clear', 'clear_generation_history', {}, false, 15000);
@@ -605,6 +47,13 @@ function createComms(ctx) {
         const entry = pending.get(payload.requestId);
         if (!entry)
             return false;
+        if (payload.type === 'request_failed') {
+            clearTimeout(entry.timeout);
+            pending.delete(payload.requestId);
+            console.warn(`[Shutter] ${typeof payload.operation === 'string' ? payload.operation : 'request'} failed: ${typeof payload.error === 'string' ? payload.error : 'Unknown backend error'}`);
+            entry.resolve(entry.fallback);
+            return true;
+        }
         const matches = (payload.type === 'generation_target' && entry.kind === 'target')
             || (payload.type === 'shutter_tag' && entry.kind === 'tag')
             || (payload.type === 'generation_history' && entry.kind === 'history')
@@ -662,9 +111,8 @@ function createComms(ctx) {
     };
 }
 
-
-};
-__modules["./frontend"] = function(module, exports, require) {
+},
+"frontend": function(require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setup = setup;
@@ -1412,9 +860,8 @@ function setup(ctx) {
     };
 }
 
-
-};
-__modules["./history"] = function(module, exports, require) {
+},
+"history": function(require, module, exports) {
 "use strict";
 // Durable Shutter generation-history data shared by the frontend and backend.
 // Keep this module environment-neutral: it is bundled into both entries.
@@ -1499,9 +946,8 @@ function formatPromptMetadataForClipboard(view) {
     return lines.join('\n');
 }
 
-
-};
-__modules["./icons"] = function(module, exports, require) {
+},
+"icons": function(require, module, exports) {
 "use strict";
 // Shutter icon SVG paths. The mono and colour variants share identical geometry
 // but differ in stroke/fill treatment. The input bar icon is a compact version
@@ -1631,9 +1077,8 @@ function getIconSet(iconId) {
     return exports.ICON_SETS[iconId] ?? exports.ICON_SETS.aperture;
 }
 
-
-};
-__modules["./lightbox"] = function(module, exports, require) {
+},
+"lightbox": function(require, module, exports) {
 "use strict";
 // The lightbox prompt label: click-driven detection of the native image
 // lightbox, caption-strip reservation, the body-level prompt pill, and all
@@ -1870,7 +1315,7 @@ function createLightboxPromptLabel(deps) {
                 const visible = area >= 10000 && intersectsViewport(rect);
                 // Prefer the fully laid-out lightbox image, but accept the pre-load
                 // <img> too so the loading shell can appear during the native spinner.
-                const score = (visible ? 1_000_000_000 : 0) + area;
+                const score = (visible ? 1000000000 : 0) + area;
                 if (!best || score > best.score)
                     best = { portalRoot, img, score };
             }
@@ -2088,9 +1533,11 @@ function createLightboxPromptLabel(deps) {
         // the shell → prompt swap without any destroy/remount or rewiring.
         function bodyContentHtml(view, sources) {
             const selector = sources.shutter && sources.embedded
-                ? `<div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
-            <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
-            <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
+                ? `<div class="sh-lightbox-prompt-source-row">
+            <div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
+              <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
+              <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
+            </div>
           </div>`
                 : '';
             const details = (0, history_1.formatPromptMetadataLine)(view);
@@ -2708,7 +2155,7 @@ function createLightboxPromptLabel(deps) {
         // lightbox's image download on constrained mobile connections.
         const recordPromise = tagPromise.then(tag => {
             const imageId = tag?.imageId ?? clickedId;
-            return imageId ? comms.getGenerationRecord(imageId) : Promise.resolve(null);
+            return imageId && chatId ? comms.getGenerationRecord(chatId, imageId) : Promise.resolve(null);
         });
         const historyPromise = recordPromise.then(record => record ? comms.getGenerationHistory(record.target) : Promise.resolve([]));
         // The tag round-trip starts NOW (Spindle message channel — no HTTP
@@ -2805,9 +2252,8 @@ function createLightboxPromptLabel(deps) {
     };
 }
 
-
-};
-__modules["./metadata"] = function(module, exports, require) {
+},
+"metadata": function(require, module, exports) {
 "use strict";
 // Image-metadata resolution: PNG text-chunk parsing and provider prompt
 // decoding (A1111/Forge, NovelAI, ComfyUI), plus the tag/URL helpers built
@@ -2968,16 +2414,15 @@ async function resolveEmbeddedPromptForImage(tag, lightboxSrc) {
     }
     return resolved;
 }
-// Backwards-compatible alias for internal callers outside the 1.0.7 source split.
+// Backwards-compatible alias for internal callers outside the 1.1.0 source split.
 exports.resolvePromptForImage = resolveEmbeddedPromptForImage;
 function extractImageId(src) {
     const match = src.match(exports.IMAGE_URL_RE);
     return match ? match[1] : null;
 }
 
-
-};
-__modules["./modals"] = function(module, exports, require) {
+},
+"modals": function(require, module, exports) {
 "use strict";
 // Shutter's modal surfaces: the post-generation destination modal, the
 // error modal, the mini image lightbox used by the destination preview, the
@@ -3230,7 +2675,7 @@ function createModals(deps) {
         btn.addEventListener('click', onClick);
         return btn;
     }
-    // ── Durable generation history (1.0.7) ──
+    // ── Durable generation history (1.1.0) ──
     //
     // The backend/userStorage record is authoritative. The modal receives the
     // complete history for the pinned message swipe, so a fresh widget press,
@@ -3474,6 +2919,8 @@ function createModals(deps) {
         let committing = false;
         let promptRenderToken = 0;
         const closeCurrentSurface = () => {
+            if (committing)
+                return;
             if (surface === 'prompt')
                 renderHistorySurface();
             else
@@ -3485,6 +2932,7 @@ function createModals(deps) {
         const previewWrap = document.createElement('div');
         previewWrap.className = 'sh-preview';
         const preview = document.createElement('img');
+        preview.alt = 'Selected Shutter generation';
         preview.addEventListener('click', () => openLightbox((0, history_1.imageUrlForHistoryRecord)(current())));
         previewWrap.appendChild(preview);
         const nav = document.createElement('div');
@@ -3496,8 +2944,10 @@ function createModals(deps) {
         prev.className = next.className = 'sh-hist-btn';
         prev.title = 'Previous generation';
         next.title = 'Next generation';
-        prev.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
-        next.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+        prev.setAttribute('aria-label', 'Previous generation');
+        next.setAttribute('aria-label', 'Next generation');
+        prev.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
+        next.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
         const count = document.createElement('span');
         count.className = 'sh-hist-counter';
         nav.append(prev, count, next);
@@ -3573,14 +3023,15 @@ function createModals(deps) {
                 // exact tag, not whichever Shutter image happens to be last now.
                 replaceImageId: replace ? initialImageId : undefined,
             });
-            if (!modal.root.isConnected)
-                return;
             if (!result.success || !result.changed) {
-                setCommitDisabled(false);
-                render();
+                if (modal.root.isConnected) {
+                    setCommitDisabled(false);
+                    render();
+                }
                 return;
             }
-            modal.dismiss();
+            if (modal.root.isConnected)
+                modal.dismiss();
             closeParentPrompt?.();
             closeUnderlyingLightbox?.();
         };
@@ -3621,15 +3072,18 @@ function createModals(deps) {
         prev.addEventListener('click', event => { event.stopPropagation(); step(-1); });
         next.addEventListener('click', event => { event.stopPropagation(); step(1); });
         const arrowHandler = (event) => {
-            if (surface !== 'history')
-                return;
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
                 return;
-            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox || isEditableTarget(event.target))
+            if (event.ctrlKey || event.metaKey || event.altKey || activeLightbox)
                 return;
-            event.preventDefault();
+            // Always isolate arrows while this logical modal is foregrounded. The
+            // child Image Prompt surface does not navigate, but Lumiverse must not
+            // swipe the underlying chat behind it.
+            if (!isEditableTarget(event.target))
+                event.preventDefault();
             event.stopImmediatePropagation();
-            step(event.key === 'ArrowLeft' ? -1 : 1);
+            if (surface === 'history' && !committing)
+                step(event.key === 'ArrowLeft' ? -1 : 1);
         };
         window.addEventListener('keydown', arrowHandler, { capture: true });
         let touchStartX = 0;
@@ -3732,7 +3186,7 @@ function createModals(deps) {
                 return;
             }
             const [record, embedded] = await Promise.all([
-                comms.getGenerationRecord(tag.imageId),
+                comms.getGenerationRecord(chatId, tag.imageId),
                 (0, metadata_1.resolveEmbeddedPromptForImage)(tag, tag.path),
             ]);
             const history = record ? await comms.getGenerationHistory(record.target) : [];
@@ -3895,9 +3349,95 @@ function createModals(deps) {
     };
 }
 
-
+},
+"settings": function(require, module, exports) {
+"use strict";
+// Shared settings model — the single source of truth for Shutter's settings
+// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
+// frontend.ts); bun bundles it into each dist file, so the host still sees
+// exactly two self-contained bundles. Everything here must stay
+// environment-neutral: no `spindle`, no DOM, no browser globals.
+//
+// Adding a setting touches this file only (type + default + validation),
+// plus wherever the setting is actually used.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
+exports.clampShutterImageWidth = clampShutterImageWidth;
+exports.validateSettings = validateSettings;
+// ── Icon IDs ──
+// Defined here (not icons.ts) so backend validation can consume the runtime
+// list without pulling the SVG payloads into the backend bundle. icons.ts
+// derives its ShutterIconSet record from this same type.
+exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
+// The runtime source of defaults. There is deliberately NO defaults/*.json
+// seed file: `storage_seed_files` copies into extension storage
+// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
+// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
+// seed was never read. loadSettings() spreads these defaults over whatever
+// userStorage returns (fallback {}), which fully covers fresh installs.
+exports.DEFAULT_SETTINGS = {
+    showFloatWidget: false,
+    toastOnInsert: true,
+    generationHistory: false,
+    gestureNavigation: false,
+    afterGenerate: 'ask_to_insert',
+    widgetSize: 'small',
+    widgetStyle: 'color',
+    iconTheme: 'aperture',
+    autoGenerate: 'off',
+    autoGenerateInterval: 3,
+    autoGenerateRandomMin: 3,
+    autoGenerateRandomMax: 7,
+    autoGenerateAfter: 'auto_insert',
+    autoPreviewPrompt: false,
+    defaultAction: 'append',
+    deleteConfirmation: 'bulk_only',
+    removeImageTagsFromContext: true,
+    showPromptInLightbox: false,
+    shutterImageLayout: 'off',
+    shutterImageWidth: 50,
+    shutterImageAlign: 'center',
 };
-__modules["./settings-panel"] = function(module, exports, require) {
+// Shared by backend validation, the settings panel's percent input, and the
+// frontend's inline image-layout stylesheet.
+function clampShutterImageWidth(value) {
+    if (!Number.isFinite(value))
+        return 100;
+    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
+}
+// ── Validation ──
+// Pure; the backend is the authority (it validates on every load and save),
+// the frontend only mirrors validated settings echoed back over the channel.
+function validateSettings(s) {
+    const out = { ...s };
+    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
+    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
+    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
+    // saveSettings re-persists the whole merged object on every save, so the
+    // stale key never self-cleans from users' settings.json; strip it here on
+    // the next write. Safe to delete this line once 1.0.5-era installs have
+    // aged out.
+    delete out.forceGeneration;
+    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
+        out.iconTheme = 'aperture';
+    }
+    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
+    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
+    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
+    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
+        out.shutterImageLayout = 'off';
+    }
+    if (out.shutterImageAlign !== 'left' &&
+        out.shutterImageAlign !== 'center' &&
+        out.shutterImageAlign !== 'right') {
+        out.shutterImageAlign = 'center';
+    }
+    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
+    return out;
+}
+
+},
+"settings-panel": function(require, module, exports) {
 "use strict";
 // The extension settings panel (mount-once pattern): host shared components
 // (switches, steppers, collapsible section) tracked via a handles record,
@@ -4387,97 +3927,8 @@ function createSettingsPanel(deps) {
     };
 }
 
-
-};
-__modules["./settings"] = function(module, exports, require) {
-"use strict";
-// Shared settings model — the single source of truth for Shutter's settings
-// shape, defaults, and validation. Imported by BOTH entries (backend.ts and
-// frontend.ts); bun bundles it into each dist file, so the host still sees
-// exactly two self-contained bundles. Everything here must stay
-// environment-neutral: no `spindle`, no DOM, no browser globals.
-//
-// Adding a setting touches this file only (type + default + validation),
-// plus wherever the setting is actually used.
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_SETTINGS = exports.SHUTTER_ICON_IDS = void 0;
-exports.clampShutterImageWidth = clampShutterImageWidth;
-exports.validateSettings = validateSettings;
-// ── Icon IDs ──
-// Defined here (not icons.ts) so backend validation can consume the runtime
-// list without pulling the SVG payloads into the backend bundle. icons.ts
-// derives its ShutterIconSet record from this same type.
-exports.SHUTTER_ICON_IDS = ['aperture', 'cherry_blossom', 'cat_lotus'];
-// The runtime source of defaults. There is deliberately NO defaults/*.json
-// seed file: `storage_seed_files` copies into extension storage
-// ({DATA_DIR}/extensions/shutter/storage/), but settings live in
-// spindle.userStorage ({DATA_DIR}/users/{userId}/extensions/shutter/) — so a
-// seed was never read. loadSettings() spreads these defaults over whatever
-// userStorage returns (fallback {}), which fully covers fresh installs.
-exports.DEFAULT_SETTINGS = {
-    showFloatWidget: false,
-    toastOnInsert: true,
-    generationHistory: false,
-    gestureNavigation: false,
-    afterGenerate: 'ask_to_insert',
-    widgetSize: 'small',
-    widgetStyle: 'color',
-    iconTheme: 'aperture',
-    autoGenerate: 'off',
-    autoGenerateInterval: 3,
-    autoGenerateRandomMin: 3,
-    autoGenerateRandomMax: 7,
-    autoGenerateAfter: 'auto_insert',
-    autoPreviewPrompt: false,
-    defaultAction: 'append',
-    deleteConfirmation: 'bulk_only',
-    removeImageTagsFromContext: true,
-    showPromptInLightbox: false,
-    shutterImageLayout: 'off',
-    shutterImageWidth: 50,
-    shutterImageAlign: 'center',
-};
-// Shared by backend validation, the settings panel's percent input, and the
-// frontend's inline image-layout stylesheet.
-function clampShutterImageWidth(value) {
-    if (!Number.isFinite(value))
-        return 100;
-    return Math.max(1, Math.min(100, Math.round(value * 10) / 10));
-}
-// ── Validation ──
-// Pure; the backend is the authority (it validates on every load and save),
-// the frontend only mirrors validated settings echoed back over the channel.
-function validateSettings(s) {
-    const out = { ...s };
-    // Migration (1.0.6): 'forceGeneration' was removed — Shutter now defers to
-    // native ImageGen's scene-change settings ("Ignore Scene Change Detection"
-    // and the threshold). 1.0.5 shipped the key in DEFAULT_SETTINGS and
-    // saveSettings re-persists the whole merged object on every save, so the
-    // stale key never self-cleans from users' settings.json; strip it here on
-    // the next write. Safe to delete this line once 1.0.5-era installs have
-    // aged out.
-    delete out.forceGeneration;
-    if (!exports.SHUTTER_ICON_IDS.includes(out.iconTheme)) {
-        out.iconTheme = 'aperture';
-    }
-    out.autoGenerateInterval = Math.max(1, Math.round(out.autoGenerateInterval));
-    out.autoGenerateRandomMin = Math.max(1, Math.round(out.autoGenerateRandomMin));
-    out.autoGenerateRandomMax = Math.max(out.autoGenerateRandomMin, Math.round(out.autoGenerateRandomMax));
-    if (out.shutterImageLayout !== 'off' && out.shutterImageLayout !== 'custom') {
-        out.shutterImageLayout = 'off';
-    }
-    if (out.shutterImageAlign !== 'left' &&
-        out.shutterImageAlign !== 'center' &&
-        out.shutterImageAlign !== 'right') {
-        out.shutterImageAlign = 'center';
-    }
-    out.shutterImageWidth = clampShutterImageWidth(Number(out.shutterImageWidth) || 100);
-    return out;
-}
-
-
-};
-__modules["./styles"] = function(module, exports, require) {
+},
+"styles": function(require, module, exports) {
 "use strict";
 // Shutter's static stylesheet and shared presentation constants.
 // The CSS string is fully static (no interpolation); the entry file
@@ -4969,9 +4420,14 @@ exports.SHUTTER_CSS = `
       height: auto;
       min-height: 0;
     }
-    .sh-lightbox-prompt-content .sh-prompt-source-tabs {
-      margin: 0 auto 8px;
-      align-self: center;
+    .sh-lightbox-prompt-source-row {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    .sh-lightbox-prompt-source-row .sh-prompt-source-tabs {
+      margin: 0;
     }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;
@@ -4981,25 +4437,28 @@ exports.SHUTTER_CSS = `
 // mirrors native's code-copy confirmation checkmark.
 exports.COPY_CHECK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
 
-
-};
-
-const __cache = Object.create(null);
-function __normalise(id) {
-  let key = id.replace(/\\/g, '/').replace(/\.js$/, '');
-  if (!key.startsWith('.')) return key;
-  if (!key.startsWith('./')) key = './' + key.replace(/^\.\//, '');
-  return key;
 }
-function __require(id) {
-  const key = __normalise(id);
-  if (__cache[key]) return __cache[key].exports;
-  const factory = __modules[key];
-  if (!factory) throw new Error('Module not found in Shutter bundle: ' + id);
+};
+const __cache = Object.create(null);
+function __resolve(from, request) {
+  if (!request.startsWith('.')) throw new Error('Unsupported external runtime import: ' + request);
+  const base = from.split('/');
+  base.pop();
+  for (const part of request.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') base.pop();
+    else base.push(part);
+  }
+  return base.join('/').replace(/\.js$/, '');
+}
+function __load(id) {
+  if (__cache[id]) return __cache[id].exports;
+  const factory = __modules[id];
+  if (!factory) throw new Error('Unknown bundled module: ' + id);
   const module = { exports: {} };
-  __cache[key] = module;
-  factory(module, module.exports, __require);
+  __cache[id] = module;
+  factory(request => __load(__resolve(id, request)), module, module.exports);
   return module.exports;
 }
-const __entry = __require("./frontend");
+const __entry = __load("frontend");
 export const setup = __entry.setup;

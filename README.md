@@ -13,7 +13,7 @@ Shutter adds a floating widget and input bar action for triggering Lumiverse's n
 | **Preview only** or **Set as background** | Shutter pins the newest message response when generation starts. It can ask whether to insert the image or insert it automatically, and can append or replace the latest Shutter image in that pinned response. Shutter does not set an active background, so **Preview only** is recommended for Shutter workflows. |
 | **Insert into chat** or **Attach to last message** | Native ImageGen handles placement. Shutter does not insert the result, and auto-generate is skipped in these modes. |
 
-When Shutter shows the **Image Generated** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** saves every successful generation for the pinned message response and text swipe. Fresh widget generations, **Rebuild Prompt**, and **Regenerate Image** all append to the same history. The history is stored in Lumiverse per-user storage, so it survives restarts and follows the same account between desktop and mobile. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
+When Shutter shows the **Image Generated** modal, you can insert or replace the result, **Regenerate Image** from its resolved prompts, or **Rebuild Prompt** from the original chat context. Optional **Generation History** saves every successful generation for the pinned message response and text swipe. Fresh widget generations, **Rebuild Prompt**, and **Regenerate Image** all append to the same history. The history is stored in compact, validated per-chat snapshots in Lumiverse per-user storage, so it survives restarts and follows the same account between desktop and mobile. **Swipe & Keyboard Navigation** adds swipes on mobile and arrow keys on desktop.
 
 Long-press or right-click the floating widget to open actions for the newest message: **Append**, **Replace**, **Force Generate**, **View Prompt**, **Remove**, and **Remove All**. **Force Generate** appears only when native scene-change detection could otherwise skip the request.
 
@@ -76,12 +76,14 @@ These settings apply only when Shutter handles placement. They do not affect **I
 - Custom image layout is scoped to inline Shutter images in message content. It does not affect native attachments, uploads, pasted images, or other markdown images.
 - Shutter saves the exact positive and negative prompts returned for each successful generation while **Generation History** is enabled. Prompt View prefers that durable record and also exposes provider metadata embedded in the image as a separate source when available. In the native lightbox, **View History** is always available beside **View Prompt** and **Copy Prompt**. The widget's **Image Prompt** modal follows Shutter's existing modal layout, with **Close**, **View History**, and **Copy Prompt** in its action row. The History viewer mirrors the Image Generated modal, offers **Close**, **View Prompt**, **Replace**, and **Insert**, and replaces the exact image that opened History rather than an unrelated last image. Insert or Replace closes the underlying native lightbox.
 - Turning **Generation History** off stops new records but does not delete existing records. Use **Clear Generation History** for explicit deletion.
+- History uses two alternating snapshots per chat. A completed write is validated before it becomes the newest revision, so an interrupted or malformed write can fall back to the previous valid snapshot without creating a file per generation.
+- Pre-release record-and-pointer data under `history/v1` is imported in place into compact chat snapshots. The source record files are left untouched after a verified import and are removed by Clear Generation History with their old epoch.
 - Per-user history syncs between devices connected to the same Lumiverse deployment and account; it is not a cloud sync between unrelated Lumiverse servers.
 - Deleting a message does not transfer its history to whichever message becomes last. Existing history for the newly exposed previous response remains associated with that response.
 
 ## Compatibility
 
-Shutter 1.0.7 requires Lumiverse 1.1.0 or newer.
+Shutter 1.1.0 requires Lumiverse 1.1.0 or newer.
 
 When upgrading:
 

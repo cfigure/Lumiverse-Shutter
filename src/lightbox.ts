@@ -931,15 +931,12 @@ export function createLightboxPromptLabel(deps: {
       const closeUnderlyingLightbox = () => {
         if (!portalRoot.isConnected || !img.isConnected) return
         dismissLabel()
-        setTimeout(() => {
-          if (!portalRoot.isConnected || !img.isConnected) return
-          document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Escape',
-            code: 'Escape',
-            bubbles: true,
-            cancelable: true,
-          }))
-        }, 0)
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }))
       }
 
       deps.openHistory(promptSources.history, promptSources.imageId, closeUnderlyingLightbox)

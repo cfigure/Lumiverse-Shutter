@@ -80,16 +80,23 @@ export const SHUTTER_CSS = `
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
-    /* Author-level display rules can override the browser's default [hidden]
-       handling in some host/WebView combinations. Keep the preview image and
-       unavailable panel strictly mutually exclusive. */
-    .sh-preview > img[hidden] { display: none !important; }
+    /* Keep the unavailable panel visually exclusive without removing the
+       image from layout. The hidden image therefore preserves the preview's
+       existing footprint, and the placeholder overlays it instead of making
+       the modal taller. */
+    .sh-preview > img[hidden] {
+      display: block !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
     .sh-preview.sh-preview-unavailable { cursor: default; }
     .sh-image-unavailable[hidden] { display: none !important; }
     .sh-image-unavailable {
+      position: absolute;
+      inset: 0;
       width: 100%;
-      height: min(34vh, 340px);
-      min-height: 180px;
+      height: 100%;
+      min-height: 0;
       padding: 24px;
       box-sizing: border-box;
       display: flex;
@@ -103,7 +110,6 @@ export const SHUTTER_CSS = `
         linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
         var(--lumiverse-bg-elevated);
     }
-    .sh-history-body .sh-image-unavailable { height: min(36vh, 360px); }
     .sh-image-unavailable-icon {
       width: 48px;
       height: 48px;

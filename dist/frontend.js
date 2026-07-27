@@ -2509,7 +2509,13 @@ function createModals(deps) {
         title.className = 'sh-image-unavailable-title';
         const detail = document.createElement('div');
         detail.className = 'sh-image-unavailable-detail';
-        root.append(icon, title, detail);
+        // Keep all presentation inside one centred group. The absolute overlay
+        // itself carries no padding, gap, minimum height, or other layout-bearing
+        // dimensions, so it cannot enlarge the preview or the host modal.
+        const content = document.createElement('div');
+        content.className = 'sh-image-unavailable-content';
+        content.append(icon, title, detail);
+        root.append(content);
         return { root, title, detail };
     }
     function setUnavailablePreview(placeholder, state) {
@@ -4315,21 +4321,32 @@ exports.SHUTTER_CSS = `
     .sh-image-unavailable {
       position: absolute;
       inset: 0;
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      padding: 24px;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      padding: 0;
+      margin: 0;
+      border: 0;
       box-sizing: border-box;
+      pointer-events: none;
+      color: var(--lumiverse-text-muted, #999);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
+        var(--lumiverse-bg-elevated);
+    }
+    .sh-image-unavailable-content {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 8px;
+      width: min(420px, calc(100% - 24px));
+      max-height: 100%;
+      margin: 0;
+      padding: 0;
       text-align: center;
-      color: var(--lumiverse-text-muted, #999);
-      background:
-        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
-        var(--lumiverse-bg-elevated);
+      overflow: hidden;
     }
     .sh-image-unavailable-icon {
       width: 48px;

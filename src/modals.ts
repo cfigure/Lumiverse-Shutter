@@ -125,7 +125,14 @@ export function createModals(deps: {
     title.className = 'sh-image-unavailable-title'
     const detail = document.createElement('div')
     detail.className = 'sh-image-unavailable-detail'
-    root.append(icon, title, detail)
+
+    // Keep all presentation inside one centred group. The absolute overlay
+    // itself carries no padding, gap, minimum height, or other layout-bearing
+    // dimensions, so it cannot enlarge the preview or the host modal.
+    const content = document.createElement('div')
+    content.className = 'sh-image-unavailable-content'
+    content.append(icon, title, detail)
+    root.append(content)
     return { root, title, detail }
   }
 

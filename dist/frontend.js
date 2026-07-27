@@ -4301,6 +4301,10 @@ exports.SHUTTER_CSS = `
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
+    /* Author-level display rules can override the browser's default [hidden]
+       handling in some host/WebView combinations. Keep the preview image and
+       unavailable panel strictly mutually exclusive. */
+    .sh-preview > img[hidden] { display: none !important; }
     .sh-preview.sh-preview-unavailable { cursor: default; }
     .sh-image-unavailable[hidden] { display: none !important; }
     .sh-image-unavailable {

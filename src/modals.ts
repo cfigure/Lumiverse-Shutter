@@ -883,9 +883,7 @@ export function createModals(deps: {
         modal.dismiss()
         closeParentPrompt?.()
         closeUnderlyingLightbox?.()
-        setTimeout(() => {
-          openPromptPreviewModal(view.prompt, view.negativePrompt, entry.target, false, false, 'preview')
-        }, 0)
+        openPromptPreviewModal(view.prompt, view.negativePrompt, entry.target, false, false, 'preview')
       }
       renderImagePromptSurface(modal, {
         initialView: shutterView,
@@ -1211,9 +1209,7 @@ export function createModals(deps: {
           ? (view) => {
               if (!view.prompt.trim()) return
               modal.dismiss()
-              setTimeout(() => {
-                openPromptPreviewModal(view.prompt, view.negativePrompt, reuseTarget, false, false, 'preview')
-              }, 0)
+              openPromptPreviewModal(view.prompt, view.negativePrompt, reuseTarget, false, false, 'preview')
             }
           : undefined,
       })

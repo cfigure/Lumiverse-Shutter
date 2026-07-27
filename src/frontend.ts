@@ -430,6 +430,10 @@ export function setup(ctx: SpindleFrontendContext) {
     setGeneratingState(false)
     resetAutoGenCounter()
 
+    // Native output modes own their own UI/insertion. Generation History is a
+    // Shutter-specific feature, so only Shutter-managed results are recorded.
+    if (result.handledByNative) return
+
     let history: GenerationHistoryRecord[] = []
     if (settings?.generationHistory) {
       history = await comms.appendGenerationHistory(target, {
@@ -442,10 +446,6 @@ export function setup(ctx: SpindleFrontendContext) {
         model: result.model,
       })
     }
-
-    // Native output modes own their own UI/insertion, but their successful
-    // generations are still useful to Prompt View and cross-device history.
-    if (result.handledByNative) return
 
     const afterAction = isAuto ? settings?.autoGenerateAfter : settings?.afterGenerate
     if (afterAction === 'auto_insert') {

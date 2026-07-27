@@ -185,8 +185,25 @@ export function createSettingsPanel(deps: {
     )
     iconRow.controlSlot.appendChild(selectIconTheme)
 
+    // Toast on Insert and Replace
+    const toastRow = makeRow('Toast on Insert and Replace', 'Show a confirmation when an image is inserted or replaced.')
+    container.appendChild(toastRow.row)
+    const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
+      checked: s.toastOnInsert,
+      onChange: (on: boolean) => deps.updateSettings({ toastOnInsert: on }),
+    })
+
+    const insertionDivider = document.createElement('div')
+    insertionDivider.className = 'sh-settings-divider'
+    container.appendChild(insertionDivider)
+
+    const insertionNote = document.createElement('div')
+    insertionNote.className = 'sh-settings-note'
+    insertionNote.textContent = 'The following settings apply only when Shutter handles the result. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
+    container.appendChild(insertionNote)
+
     // Generation History (parent)
-    const historyRow = makeRow('Generation History', 'Save and sync generated images and their submitted prompts for each message response.')
+    const historyRow = makeRow('Generation History', 'Save successful Shutter-managed generations and their submitted prompts. Results handled natively by ImageGen are not recorded.')
     container.appendChild(historyRow.row)
     const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
       checked: s.generationHistory,
@@ -244,23 +261,6 @@ export function createSettingsPanel(deps: {
       }, 1800)
     })
     clearHistoryRow.controlSlot.appendChild(clearHistoryBtn)
-
-    // Toast on Insert and Replace
-    const toastRow = makeRow('Toast on Insert and Replace', 'Show a confirmation when an image is inserted or replaced.')
-    container.appendChild(toastRow.row)
-    const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
-      checked: s.toastOnInsert,
-      onChange: (on: boolean) => deps.updateSettings({ toastOnInsert: on }),
-    })
-
-    const insertionDivider = document.createElement('div')
-    insertionDivider.className = 'sh-settings-divider'
-    container.appendChild(insertionDivider)
-
-    const insertionNote = document.createElement('div')
-    insertionNote.className = 'sh-settings-note'
-    insertionNote.textContent = 'The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
-    container.appendChild(insertionNote)
 
     // Remove Image Tags from Context
     const hasInterceptorPermission = deps.hasPermission('interceptor')

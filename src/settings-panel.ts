@@ -262,6 +262,19 @@ export function createSettingsPanel(deps: {
     })
     clearHistoryRow.controlSlot.appendChild(clearHistoryBtn)
 
+    // Show Prompt in Lightbox (requires app_manipulation)
+    const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
+    const lightboxPromptRow = makeRow(
+      'Show Prompt and History in Lightbox',
+      'Show saved prompt details and generation history for Shutter images opened in the native image viewer. Embedded image metadata is used when saved Shutter data is unavailable.',
+    )
+    container.appendChild(lightboxPromptRow.row)
+    const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {
+      checked: s.showPromptInLightbox,
+      disabled: !hasAppManipulationPermission,
+      onChange: (on: boolean) => deps.updateSettings({ showPromptInLightbox: on }),
+    })
+
     // Remove Image Tags from Context
     const hasInterceptorPermission = deps.hasPermission('interceptor')
     const imageTagContextDescription =
@@ -313,19 +326,6 @@ export function createSettingsPanel(deps: {
       (v) => deps.updateSettings({ shutterImageAlign: v as Settings['shutterImageAlign'] }),
     )
     imageAlignRow.controlSlot.appendChild(selectShutterImageAlign)
-
-    // Show Prompt in Lightbox (requires app_manipulation)
-    const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
-    const lightboxPromptRow = makeRow(
-      'Show Prompt in Lightbox',
-      'Show prompt metadata below Shutter images opened in the native image viewer. Saved Shutter data is preferred, with embedded image metadata available when present.',
-    )
-    container.appendChild(lightboxPromptRow.row)
-    const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {
-      checked: s.showPromptInLightbox,
-      disabled: !hasAppManipulationPermission,
-      onChange: (on: boolean) => deps.updateSettings({ showPromptInLightbox: on }),
-    })
 
     // After Generation — native <select>
     const afterRow = makeRow('After Generation', 'What to do after a manual generation.')

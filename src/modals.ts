@@ -290,6 +290,7 @@ export function createModals(deps: {
       onClose: () => void
       historyLabel?: string
       onViewHistory?: () => void
+      onUsePrompt?: (view: PromptMetadataView) => void
     },
   ): void {
     modal.setTitle('Image Prompt')
@@ -300,6 +301,7 @@ export function createModals(deps: {
     body.className = 'sh-prompt-body sh-image-prompt-body'
 
     const sourceSlot = document.createElement('div')
+    let usePromptBtn: HTMLButtonElement | null = null
     const meta = document.createElement('div')
     meta.className = 'sh-prompt-source-meta sh-image-prompt-meta'
     const fields = document.createElement('div')
@@ -316,6 +318,7 @@ export function createModals(deps: {
       const metadataLine = formatPromptMetadataLine(view)
       meta.textContent = metadataLine
       meta.hidden = !metadataLine
+      if (usePromptBtn) usePromptBtn.disabled = !view.prompt.trim()
 
       fields.replaceChildren()
       fields.classList.toggle('sh-no-negative', !view.negativePrompt)
@@ -374,6 +377,20 @@ export function createModals(deps: {
     copyBtn.textContent = 'Copy Prompt'
     copyBtn.addEventListener('click', () => setCopyFeedback(copyBtn, activeView))
     actions.appendChild(copyBtn)
+
+    if (options.onUsePrompt) {
+      usePromptBtn = document.createElement('button')
+      usePromptBtn.type = 'button'
+      usePromptBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'
+      usePromptBtn.textContent = 'Use Prompt'
+      usePromptBtn.title = 'Open this prompt in Preview & Edit Image Prompt'
+      usePromptBtn.addEventListener('click', () => {
+        if (!activeView.prompt.trim()) return
+        options.onUsePrompt?.(activeView)
+      })
+      actions.appendChild(usePromptBtn)
+    }
+
     body.appendChild(actions)
 
     modal.root.replaceChildren(body)
@@ -861,9 +878,19 @@ export function createModals(deps: {
       const shutterView = promptViewFromRecord(entry)
       const token = ++promptRenderToken
       surface = 'prompt'
+      const useSelectedPrompt = (view: PromptMetadataView): void => {
+        if (!view.prompt.trim()) return
+        modal.dismiss()
+        closeParentPrompt?.()
+        closeUnderlyingLightbox?.()
+        setTimeout(() => {
+          openPromptPreviewModal(view.prompt, view.negativePrompt, entry.target, false, false, 'preview')
+        }, 0)
+      }
       renderImagePromptSurface(modal, {
         initialView: shutterView,
         onClose: renderHistorySurface,
+        onUsePrompt: useSelectedPrompt,
       })
 
       // The durable Shutter prompt remains usable after the image asset is
@@ -879,6 +906,7 @@ export function createModals(deps: {
           shutterView,
           embeddedView,
           onClose: renderHistorySurface,
+          onUsePrompt: useSelectedPrompt,
         })
       })
     }
@@ -1151,10 +1179,12 @@ export function createModals(deps: {
         return
       }
 
-      const [record, embedded] = await Promise.all([
+      const [record, embedded, resolvedTarget] = await Promise.all([
         comms.getGenerationRecord(chatId, tag.imageId),
         resolveEmbeddedPromptForImage(tag, tag.path),
+        comms.resolveGenerationTarget(chatId, '__last__'),
       ])
+      const reuseTarget = record?.target ?? resolvedTarget
       const history = record ? await comms.getGenerationHistory(record.target) : []
       if (dismissed) return
       destroySpinner()
@@ -1176,6 +1206,15 @@ export function createModals(deps: {
         historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
         onViewHistory: history.length > 0
           ? () => openHistoryViewer(history, tag.imageId, undefined, () => modal.dismiss())
+          : undefined,
+        onUsePrompt: reuseTarget
+          ? (view) => {
+              if (!view.prompt.trim()) return
+              modal.dismiss()
+              setTimeout(() => {
+                openPromptPreviewModal(view.prompt, view.negativePrompt, reuseTarget, false, false, 'preview')
+              }, 0)
+            }
           : undefined,
       })
     })()

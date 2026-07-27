@@ -2438,6 +2438,104 @@ const history_1 = require("./history");
 function createModals(deps) {
     const { ctx, comms } = deps;
     let promptPreviewOpen = false;
+    const IMAGE_AVAILABILITY_MAX_AGE_MS = 10000;
+    const imageAvailabilityCache = new Map();
+    const imageAvailabilityPending = new Map();
+    function getCachedImageAvailability(imageId, maxAgeMs = IMAGE_AVAILABILITY_MAX_AGE_MS) {
+        const cached = imageAvailabilityCache.get(imageId);
+        if (!cached)
+            return null;
+        if (cached.status === 'missing')
+            return 'missing';
+        if (Date.now() - cached.checkedAt <= maxAgeMs)
+            return cached.status;
+        imageAvailabilityCache.delete(imageId);
+        return null;
+    }
+    async function checkGeneratedImageAvailability(imageId, options = {}) {
+        if (!options.force) {
+            const cached = getCachedImageAvailability(imageId, options.maxAgeMs);
+            if (cached)
+                return cached;
+            const pending = imageAvailabilityPending.get(imageId);
+            if (pending)
+                return pending;
+        }
+        const request = (async () => {
+            try {
+                const probeId = typeof crypto?.randomUUID === 'function'
+                    ? crypto.randomUUID()
+                    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                const response = await fetch(`/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { Range: 'bytes=0-0' },
+                });
+                const status = response.status === 404
+                    ? 'missing'
+                    : response.ok
+                        ? 'available'
+                        : 'unknown';
+                try {
+                    await response.body?.cancel();
+                }
+                catch { /* best-effort early body release */ }
+                if (status !== 'unknown') {
+                    imageAvailabilityCache.set(imageId, { status, checkedAt: Date.now() });
+                }
+                return status;
+            }
+            catch {
+                return 'unknown';
+            }
+            finally {
+                imageAvailabilityPending.delete(imageId);
+            }
+        })();
+        imageAvailabilityPending.set(imageId, request);
+        return request;
+    }
+    function makeUnavailablePreview() {
+        const root = document.createElement('div');
+        root.className = 'sh-image-unavailable';
+        root.hidden = true;
+        root.setAttribute('role', 'status');
+        const icon = document.createElement('div');
+        icon.className = 'sh-image-unavailable-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/><path d="M4 4l16 16"/></svg>';
+        const title = document.createElement('div');
+        title.className = 'sh-image-unavailable-title';
+        const detail = document.createElement('div');
+        detail.className = 'sh-image-unavailable-detail';
+        root.append(icon, title, detail);
+        return { root, title, detail };
+    }
+    function setUnavailablePreview(placeholder, state) {
+        placeholder.root.dataset.state = state;
+        if (state === 'missing') {
+            placeholder.title.textContent = 'Image unavailable';
+            placeholder.detail.textContent = 'The original image file has been deleted. Its saved Shutter prompt is still available.';
+        }
+        else if (state === 'checking') {
+            placeholder.title.textContent = 'Checking image availability…';
+            placeholder.detail.textContent = 'The saved Shutter prompt remains available.';
+        }
+        else {
+            placeholder.title.textContent = 'Image availability could not be checked';
+            placeholder.detail.textContent = 'The saved Shutter prompt remains available. Try again when the connection is available.';
+        }
+    }
+    function showAvailabilityToast(status) {
+        ctx.sendToBackend({
+            type: 'show_toast',
+            level: status === 'missing' ? 'info' : 'warning',
+            message: status === 'missing'
+                ? 'The original image has been deleted. Its saved Shutter prompt is still available.'
+                : 'Shutter could not verify that this image is still available.',
+        });
+    }
     const modalInputStack = [];
     // ── Modals ──
     // ── Lightbox state (for cleanup) ──
@@ -2712,12 +2810,40 @@ function createModals(deps) {
         isolateModalInput(modal, { blockArrows: !gestureEnabled });
         const container = document.createElement('div');
         container.className = 'sh-modal-body';
+        imageAvailabilityCache.set(result.imageId, { status: 'available', checkedAt: Date.now() });
+        let selectedAvailability = 'checking';
+        let previewLoadFailed = false;
+        let availabilityRenderToken = 0;
+        let insertBtn = null;
         const previewWrap = document.createElement('div');
         previewWrap.className = 'sh-preview';
         const preview = document.createElement('img');
-        preview.src = (0, history_1.imageUrlForHistoryRecord)(current());
-        preview.addEventListener('click', () => openLightbox((0, history_1.imageUrlForHistoryRecord)(current())));
-        previewWrap.appendChild(preview);
+        preview.alt = 'Selected Shutter generation';
+        const unavailablePreview = makeUnavailablePreview();
+        preview.addEventListener('click', () => {
+            if (selectedAvailability !== 'missing' && !(selectedAvailability === 'unknown' && previewLoadFailed)) {
+                openLightbox((0, history_1.imageUrlForHistoryRecord)(current()));
+            }
+        });
+        preview.addEventListener('load', () => {
+            previewLoadFailed = false;
+            if (selectedAvailability !== 'missing')
+                unavailablePreview.root.hidden = true;
+        });
+        preview.addEventListener('error', () => {
+            previewLoadFailed = true;
+            if (selectedAvailability === 'missing')
+                setUnavailablePreview(unavailablePreview, 'missing');
+            else if (selectedAvailability === 'unknown')
+                setUnavailablePreview(unavailablePreview, 'unknown');
+            else
+                setUnavailablePreview(unavailablePreview, 'checking');
+            preview.hidden = true;
+            unavailablePreview.root.hidden = false;
+            if (insertBtn)
+                insertBtn.disabled = true;
+        });
+        previewWrap.append(preview, unavailablePreview.root);
         const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
         const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
         const makeNavBtn = (dir) => {
@@ -2745,11 +2871,51 @@ function createModals(deps) {
         if (historyEnabled)
             previewWrap.appendChild(histPill);
         container.appendChild(previewWrap);
+        function applyDestinationAvailability(status) {
+            selectedAvailability = status;
+            const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed);
+            preview.hidden = unavailable;
+            unavailablePreview.root.hidden = !unavailable;
+            previewWrap.classList.toggle('sh-preview-unavailable', unavailable);
+            if (unavailable)
+                setUnavailablePreview(unavailablePreview, status === 'missing' ? 'missing' : 'unknown');
+            if (insertBtn) {
+                insertBtn.disabled = unavailable;
+                insertBtn.title = status === 'missing'
+                    ? 'The original image file has been deleted'
+                    : status === 'unknown' && previewLoadFailed
+                        ? 'Shutter could not verify that this image is available'
+                        : 'Insert the selected image into its message response';
+            }
+            if (status === 'missing')
+                dismissLightbox();
+        }
+        function refreshDestinationAvailability(entry) {
+            const token = ++availabilityRenderToken;
+            previewLoadFailed = false;
+            selectedAvailability = 'checking';
+            preview.hidden = false;
+            unavailablePreview.root.hidden = true;
+            previewWrap.classList.remove('sh-preview-unavailable');
+            if (insertBtn)
+                insertBtn.disabled = false;
+            const cached = getCachedImageAvailability(entry.imageId);
+            if (cached) {
+                applyDestinationAvailability(cached);
+                return;
+            }
+            void checkGeneratedImageAvailability(entry.imageId).then(status => {
+                if (token !== availabilityRenderToken || current().imageId !== entry.imageId || !modal.root.isConnected)
+                    return;
+                applyDestinationAvailability(status);
+            });
+        }
         function renderHistory() {
             const entry = current();
             const url = (0, history_1.imageUrlForHistoryRecord)(entry);
+            refreshDestinationAvailability(entry);
             preview.src = url;
-            if (activeLightbox) {
+            if (activeLightbox && selectedAvailability !== 'missing') {
                 const img = activeLightbox.overlay.querySelector('img');
                 if (img)
                     img.src = url;
@@ -2877,7 +3043,7 @@ function createModals(deps) {
         choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
             void regenerateFromSelected();
         }));
-        choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+        const commitDestinationInsert = () => {
             ctx.sendToBackend({
                 type: 'insert_into_message',
                 imageId: current().imageId,
@@ -2887,7 +3053,32 @@ function createModals(deps) {
                 replace: replaceChecked,
             });
             modal.dismiss();
-        }));
+        };
+        const destinationInsertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+            const entry = current();
+            const cached = getCachedImageAvailability(entry.imageId, 1500);
+            if (cached === 'available') {
+                commitDestinationInsert();
+                return;
+            }
+            if (cached === 'missing') {
+                applyDestinationAvailability('missing');
+                showAvailabilityToast('missing');
+                return;
+            }
+            destinationInsertBtn.disabled = true;
+            void checkGeneratedImageAvailability(entry.imageId, { maxAgeMs: 1500 }).then(status => {
+                if (!modal.root.isConnected || current().imageId !== entry.imageId)
+                    return;
+                applyDestinationAvailability(status);
+                if (status === 'available')
+                    commitDestinationInsert();
+                else
+                    showAvailabilityToast(status);
+            });
+        });
+        insertBtn = destinationInsertBtn;
+        choices.appendChild(destinationInsertBtn);
         container.appendChild(choices);
         modal.root.appendChild(container);
         renderHistory();
@@ -2918,6 +3109,9 @@ function createModals(deps) {
         let surface = 'history';
         let committing = false;
         let promptRenderToken = 0;
+        let selectedAvailability = 'checking';
+        let previewLoadFailed = false;
+        let availabilityRenderToken = 0;
         const closeCurrentSurface = () => {
             if (committing)
                 return;
@@ -2933,8 +3127,30 @@ function createModals(deps) {
         previewWrap.className = 'sh-preview';
         const preview = document.createElement('img');
         preview.alt = 'Selected Shutter generation';
-        preview.addEventListener('click', () => openLightbox((0, history_1.imageUrlForHistoryRecord)(current())));
-        previewWrap.appendChild(preview);
+        const unavailablePreview = makeUnavailablePreview();
+        preview.addEventListener('click', () => {
+            if (selectedAvailability !== 'missing' && !(selectedAvailability === 'unknown' && previewLoadFailed)) {
+                openLightbox((0, history_1.imageUrlForHistoryRecord)(current()));
+            }
+        });
+        preview.addEventListener('load', () => {
+            previewLoadFailed = false;
+            if (selectedAvailability !== 'missing')
+                unavailablePreview.root.hidden = true;
+        });
+        preview.addEventListener('error', () => {
+            previewLoadFailed = true;
+            if (selectedAvailability === 'missing')
+                setUnavailablePreview(unavailablePreview, 'missing');
+            else if (selectedAvailability === 'unknown')
+                setUnavailablePreview(unavailablePreview, 'unknown');
+            else
+                setUnavailablePreview(unavailablePreview, 'checking');
+            preview.hidden = true;
+            unavailablePreview.root.hidden = false;
+            updateHistoryActionState();
+        });
+        previewWrap.append(preview, unavailablePreview.root);
         const nav = document.createElement('div');
         nav.className = 'sh-hist-pill';
         nav.addEventListener('click', event => event.stopPropagation());
@@ -2979,6 +3195,10 @@ function createModals(deps) {
                 initialView: shutterView,
                 onClose: renderHistorySurface,
             });
+            // The durable Shutter prompt remains usable after the image asset is
+            // deleted, but embedded metadata requires the original image bytes.
+            if (selectedAvailability === 'missing' || getCachedImageAvailability(entry.imageId) === 'missing')
+                return;
             const imageUrl = (0, history_1.imageUrlForHistoryRecord)(entry);
             void (0, metadata_1.resolveEmbeddedPromptForImage)({ imageId: entry.imageId, path: imageUrl }, imageUrl).then(embedded => {
                 if (!embedded || surface !== 'prompt' || token !== promptRenderToken || !modal.root.isConnected)
@@ -3003,16 +3223,52 @@ function createModals(deps) {
         insertBtn.className = 'sh-prompt-btn sh-prompt-btn-primary';
         insertBtn.textContent = 'Insert';
         insertBtn.title = 'Insert this image into its original message response';
+        function isSelectedImageUnavailable() {
+            return selectedAvailability === 'missing' || (selectedAvailability === 'unknown' && previewLoadFailed);
+        }
+        function updateHistoryActionState() {
+            const unavailable = isSelectedImageUnavailable();
+            closeBtn.disabled = committing;
+            viewPromptBtn.disabled = committing;
+            prev.disabled = committing || idx === 0;
+            next.disabled = committing || idx === history.length - 1;
+            replaceBtn.disabled = committing || unavailable;
+            insertBtn.disabled = committing || unavailable;
+            replaceBtn.title = selectedAvailability === 'missing'
+                ? 'The original image file has been deleted'
+                : selectedAvailability === 'unknown' && previewLoadFailed
+                    ? 'Shutter could not verify that this image is available'
+                    : 'Replace the image that opened Generation History';
+            insertBtn.title = selectedAvailability === 'missing'
+                ? 'The original image file has been deleted'
+                : selectedAvailability === 'unknown' && previewLoadFailed
+                    ? 'Shutter could not verify that this image is available'
+                    : 'Insert this image into its original message response';
+        }
         const setCommitDisabled = (disabled) => {
             committing = disabled;
-            for (const button of [closeBtn, viewPromptBtn, replaceBtn, insertBtn, prev, next])
-                button.disabled = disabled;
+            updateHistoryActionState();
         };
         const commitSelected = async (replace) => {
             if (committing)
                 return;
             setCommitDisabled(true);
             const entry = current();
+            const availability = await checkGeneratedImageAvailability(entry.imageId, { maxAgeMs: 1500 });
+            if (availability !== 'available') {
+                if (modal.root.isConnected) {
+                    selectedAvailability = availability;
+                    if (availability === 'missing' || previewLoadFailed) {
+                        preview.hidden = true;
+                        unavailablePreview.root.hidden = false;
+                        previewWrap.classList.add('sh-preview-unavailable');
+                        setUnavailablePreview(unavailablePreview, availability === 'missing' ? 'missing' : 'unknown');
+                    }
+                    setCommitDisabled(false);
+                }
+                showAvailabilityToast(availability);
+                return;
+            }
             const result = await comms.insertIntoMessage({
                 imageId: entry.imageId,
                 messageId: entry.target.messageId,
@@ -3039,17 +3295,49 @@ function createModals(deps) {
         insertBtn.addEventListener('click', () => { void commitSelected(false); });
         actions.append(closeBtn, viewPromptBtn, replaceBtn, insertBtn);
         container.appendChild(actions);
+        function applyHistoryAvailability(status) {
+            selectedAvailability = status;
+            const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed);
+            preview.hidden = unavailable;
+            unavailablePreview.root.hidden = !unavailable;
+            previewWrap.classList.toggle('sh-preview-unavailable', unavailable);
+            if (unavailable)
+                setUnavailablePreview(unavailablePreview, status === 'missing' ? 'missing' : 'unknown');
+            updateHistoryActionState();
+            if (status === 'missing')
+                dismissLightbox();
+        }
+        function refreshHistoryAvailability(entry) {
+            const token = ++availabilityRenderToken;
+            previewLoadFailed = false;
+            selectedAvailability = 'checking';
+            preview.hidden = false;
+            unavailablePreview.root.hidden = true;
+            previewWrap.classList.remove('sh-preview-unavailable');
+            updateHistoryActionState();
+            const cached = getCachedImageAvailability(entry.imageId);
+            if (cached) {
+                applyHistoryAvailability(cached);
+                return;
+            }
+            void checkGeneratedImageAvailability(entry.imageId).then(status => {
+                if (token !== availabilityRenderToken || current().imageId !== entry.imageId || !modal.root.isConnected)
+                    return;
+                applyHistoryAvailability(status);
+            });
+        }
         function render() {
             const entry = current();
-            preview.src = (0, history_1.imageUrlForHistoryRecord)(entry);
+            const url = (0, history_1.imageUrlForHistoryRecord)(entry);
+            refreshHistoryAvailability(entry);
+            preview.src = url;
             count.textContent = `${idx + 1} / ${history.length}`;
-            prev.disabled = committing || idx === 0;
-            next.disabled = committing || idx === history.length - 1;
             summary.textContent = (0, history_1.formatPromptMetadataLine)((0, history_1.promptViewFromRecord)(entry));
-            if (activeLightbox) {
+            updateHistoryActionState();
+            if (activeLightbox && selectedAvailability !== 'missing') {
                 const lightboxImage = activeLightbox.overlay.querySelector('img');
                 if (lightboxImage)
-                    lightboxImage.src = (0, history_1.imageUrlForHistoryRecord)(entry);
+                    lightboxImage.src = url;
             }
         }
         function renderHistorySurface() {
@@ -3631,8 +3919,8 @@ function createSettingsPanel(deps) {
             }, 1800);
         });
         clearHistoryRow.controlSlot.appendChild(clearHistoryBtn);
-        // Toast on Insert
-        const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.');
+        // Toast on Insert and Replace
+        const toastRow = makeRow('Toast on Insert and Replace', 'Show a confirmation when an image is inserted or replaced.');
         container.appendChild(toastRow.row);
         const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
             checked: s.toastOnInsert,
@@ -4013,6 +4301,47 @@ exports.SHUTTER_CSS = `
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
+    .sh-preview.sh-preview-unavailable { cursor: default; }
+    .sh-image-unavailable[hidden] { display: none !important; }
+    .sh-image-unavailable {
+      width: 100%;
+      height: min(34vh, 340px);
+      min-height: 180px;
+      padding: 24px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--lumiverse-text-muted, #999);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
+        var(--lumiverse-bg-elevated);
+    }
+    .sh-history-body .sh-image-unavailable { height: min(36vh, 360px); }
+    .sh-image-unavailable-icon {
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--lumiverse-text-dim, #777);
+      opacity: 0.9;
+    }
+    .sh-image-unavailable-icon svg { width: 100%; height: 100%; }
+    .sh-image-unavailable-title {
+      color: var(--lumiverse-text, #eee);
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-weight: 650;
+      line-height: 1.3;
+    }
+    .sh-image-unavailable-detail {
+      max-width: 420px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      line-height: 1.5;
+    }
 
     /* ── Generation history nav — matches SwipeControls.module.css (.bubble variant) ── */
     .sh-hist-pill { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 16px; background: var(--lumiverse-fill-heavy); border: 1px solid var(--lumiverse-border); font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace; font-size: calc(11px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); letter-spacing: 0.04em; z-index: 2; cursor: default; }

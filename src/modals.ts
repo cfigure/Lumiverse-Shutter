@@ -39,6 +39,123 @@ export function createModals(deps: {
 
   let promptPreviewOpen = false
 
+  type GeneratedImageAvailability = 'available' | 'missing' | 'unknown'
+  type GeneratedImageAvailabilityCacheEntry = {
+    status: Exclude<GeneratedImageAvailability, 'unknown'>
+    checkedAt: number
+  }
+
+  const IMAGE_AVAILABILITY_MAX_AGE_MS = 10_000
+  const imageAvailabilityCache = new Map<string, GeneratedImageAvailabilityCacheEntry>()
+  const imageAvailabilityPending = new Map<string, Promise<GeneratedImageAvailability>>()
+
+  function getCachedImageAvailability(imageId: string, maxAgeMs = IMAGE_AVAILABILITY_MAX_AGE_MS): GeneratedImageAvailability | null {
+    const cached = imageAvailabilityCache.get(imageId)
+    if (!cached) return null
+    if (cached.status === 'missing') return 'missing'
+    if (Date.now() - cached.checkedAt <= maxAgeMs) return cached.status
+    imageAvailabilityCache.delete(imageId)
+    return null
+  }
+
+  async function checkGeneratedImageAvailability(
+    imageId: string,
+    options: { maxAgeMs?: number; force?: boolean } = {},
+  ): Promise<GeneratedImageAvailability> {
+    if (!options.force) {
+      const cached = getCachedImageAvailability(imageId, options.maxAgeMs)
+      if (cached) return cached
+      const pending = imageAvailabilityPending.get(imageId)
+      if (pending) return pending
+    }
+
+    const request = (async (): Promise<GeneratedImageAvailability> => {
+      try {
+        const probeId = typeof crypto?.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        const response = await fetch(
+          `/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`,
+          {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Range: 'bytes=0-0' },
+          },
+        )
+
+        const status: GeneratedImageAvailability = response.status === 404
+          ? 'missing'
+          : response.ok
+            ? 'available'
+            : 'unknown'
+        try { await response.body?.cancel() } catch { /* best-effort early body release */ }
+
+        if (status !== 'unknown') {
+          imageAvailabilityCache.set(imageId, { status, checkedAt: Date.now() })
+        }
+        return status
+      } catch {
+        return 'unknown'
+      } finally {
+        imageAvailabilityPending.delete(imageId)
+      }
+    })()
+
+    imageAvailabilityPending.set(imageId, request)
+    return request
+  }
+
+  function makeUnavailablePreview(): {
+    root: HTMLDivElement
+    title: HTMLDivElement
+    detail: HTMLDivElement
+  } {
+    const root = document.createElement('div')
+    root.className = 'sh-image-unavailable'
+    root.hidden = true
+    root.setAttribute('role', 'status')
+
+    const icon = document.createElement('div')
+    icon.className = 'sh-image-unavailable-icon'
+    icon.setAttribute('aria-hidden', 'true')
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/><path d="M4 4l16 16"/></svg>'
+
+    const title = document.createElement('div')
+    title.className = 'sh-image-unavailable-title'
+    const detail = document.createElement('div')
+    detail.className = 'sh-image-unavailable-detail'
+    root.append(icon, title, detail)
+    return { root, title, detail }
+  }
+
+  function setUnavailablePreview(
+    placeholder: ReturnType<typeof makeUnavailablePreview>,
+    state: 'missing' | 'unknown' | 'checking',
+  ): void {
+    placeholder.root.dataset.state = state
+    if (state === 'missing') {
+      placeholder.title.textContent = 'Image unavailable'
+      placeholder.detail.textContent = 'The original image file has been deleted. Its saved Shutter prompt is still available.'
+    } else if (state === 'checking') {
+      placeholder.title.textContent = 'Checking image availability…'
+      placeholder.detail.textContent = 'The saved Shutter prompt remains available.'
+    } else {
+      placeholder.title.textContent = 'Image availability could not be checked'
+      placeholder.detail.textContent = 'The saved Shutter prompt remains available. Try again when the connection is available.'
+    }
+  }
+
+  function showAvailabilityToast(status: Exclude<GeneratedImageAvailability, 'available'>): void {
+    ctx.sendToBackend({
+      type: 'show_toast',
+      level: status === 'missing' ? 'info' : 'warning',
+      message: status === 'missing'
+        ? 'The original image has been deleted. Its saved Shutter prompt is still available.'
+        : 'Shutter could not verify that this image is still available.',
+    })
+  }
+
   type ModalHandle = {
     root: HTMLElement
     dismiss(): void
@@ -308,7 +425,7 @@ export function createModals(deps: {
     document.body.appendChild(overlay)
   }
 
-  function makeDestBtn(label: string, tooltip: string, variant: string, onClick: () => void): HTMLElement {
+  function makeDestBtn(label: string, tooltip: string, variant: string, onClick: () => void): HTMLButtonElement {
     const btn = document.createElement('button')
     btn.className = `sh-prompt-btn ${variant}`
     btn.textContent = label
@@ -365,12 +482,36 @@ export function createModals(deps: {
     const container = document.createElement('div')
     container.className = 'sh-modal-body'
 
+    imageAvailabilityCache.set(result.imageId, { status: 'available', checkedAt: Date.now() })
+    let selectedAvailability: GeneratedImageAvailability | 'checking' = 'checking'
+    let previewLoadFailed = false
+    let availabilityRenderToken = 0
+    let insertBtn: HTMLButtonElement | null = null
+
     const previewWrap = document.createElement('div')
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
-    preview.src = imageUrlForHistoryRecord(current())
-    preview.addEventListener('click', () => openLightbox(imageUrlForHistoryRecord(current())))
-    previewWrap.appendChild(preview)
+    preview.alt = 'Selected Shutter generation'
+    const unavailablePreview = makeUnavailablePreview()
+    preview.addEventListener('click', () => {
+      if (selectedAvailability !== 'missing' && !(selectedAvailability === 'unknown' && previewLoadFailed)) {
+        openLightbox(imageUrlForHistoryRecord(current()))
+      }
+    })
+    preview.addEventListener('load', () => {
+      previewLoadFailed = false
+      if (selectedAvailability !== 'missing') unavailablePreview.root.hidden = true
+    })
+    preview.addEventListener('error', () => {
+      previewLoadFailed = true
+      if (selectedAvailability === 'missing') setUnavailablePreview(unavailablePreview, 'missing')
+      else if (selectedAvailability === 'unknown') setUnavailablePreview(unavailablePreview, 'unknown')
+      else setUnavailablePreview(unavailablePreview, 'checking')
+      preview.hidden = true
+      unavailablePreview.root.hidden = false
+      if (insertBtn) insertBtn.disabled = true
+    })
+    previewWrap.append(preview, unavailablePreview.root)
 
     const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>'
     const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>'
@@ -399,11 +540,51 @@ export function createModals(deps: {
     if (historyEnabled) previewWrap.appendChild(histPill)
     container.appendChild(previewWrap)
 
+    function applyDestinationAvailability(status: GeneratedImageAvailability): void {
+      selectedAvailability = status
+      const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed)
+      preview.hidden = unavailable
+      unavailablePreview.root.hidden = !unavailable
+      previewWrap.classList.toggle('sh-preview-unavailable', unavailable)
+      if (unavailable) setUnavailablePreview(unavailablePreview, status === 'missing' ? 'missing' : 'unknown')
+      if (insertBtn) {
+        insertBtn.disabled = unavailable
+        insertBtn.title = status === 'missing'
+          ? 'The original image file has been deleted'
+          : status === 'unknown' && previewLoadFailed
+            ? 'Shutter could not verify that this image is available'
+            : 'Insert the selected image into its message response'
+      }
+      if (status === 'missing') dismissLightbox()
+    }
+
+    function refreshDestinationAvailability(entry: GenerationHistoryRecord): void {
+      const token = ++availabilityRenderToken
+      previewLoadFailed = false
+      selectedAvailability = 'checking'
+      preview.hidden = false
+      unavailablePreview.root.hidden = true
+      previewWrap.classList.remove('sh-preview-unavailable')
+      if (insertBtn) insertBtn.disabled = false
+
+      const cached = getCachedImageAvailability(entry.imageId)
+      if (cached) {
+        applyDestinationAvailability(cached)
+        return
+      }
+
+      void checkGeneratedImageAvailability(entry.imageId).then(status => {
+        if (token !== availabilityRenderToken || current().imageId !== entry.imageId || !modal.root.isConnected) return
+        applyDestinationAvailability(status)
+      })
+    }
+
     function renderHistory() {
       const entry = current()
       const url = imageUrlForHistoryRecord(entry)
+      refreshDestinationAvailability(entry)
       preview.src = url
-      if (activeLightbox) {
+      if (activeLightbox && selectedAvailability !== 'missing') {
         const img = activeLightbox.overlay.querySelector('img')
         if (img) img.src = url
       }
@@ -518,7 +699,7 @@ export function createModals(deps: {
     choices.appendChild(makeDestBtn('Regenerate Image', 'Generate again with the selected image’s prompt', 'sh-prompt-btn-secondary', () => {
       void regenerateFromSelected()
     }))
-    choices.appendChild(makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+    const commitDestinationInsert = (): void => {
       ctx.sendToBackend({
         type: 'insert_into_message',
         imageId: current().imageId,
@@ -528,7 +709,30 @@ export function createModals(deps: {
         replace: replaceChecked,
       })
       modal.dismiss()
-    }))
+    }
+    const destinationInsertBtn = makeDestBtn('Insert', 'Insert the selected image into its message response', 'sh-prompt-btn-primary', () => {
+      const entry = current()
+      const cached = getCachedImageAvailability(entry.imageId, 1_500)
+      if (cached === 'available') {
+        commitDestinationInsert()
+        return
+      }
+      if (cached === 'missing') {
+        applyDestinationAvailability('missing')
+        showAvailabilityToast('missing')
+        return
+      }
+
+      destinationInsertBtn.disabled = true
+      void checkGeneratedImageAvailability(entry.imageId, { maxAgeMs: 1_500 }).then(status => {
+        if (!modal.root.isConnected || current().imageId !== entry.imageId) return
+        applyDestinationAvailability(status)
+        if (status === 'available') commitDestinationInsert()
+        else showAvailabilityToast(status)
+      })
+    })
+    insertBtn = destinationInsertBtn
+    choices.appendChild(destinationInsertBtn)
     container.appendChild(choices)
     modal.root.appendChild(container)
 
@@ -567,6 +771,9 @@ export function createModals(deps: {
     let surface: 'history' | 'prompt' = 'history'
     let committing = false
     let promptRenderToken = 0
+    let selectedAvailability: GeneratedImageAvailability | 'checking' = 'checking'
+    let previewLoadFailed = false
+    let availabilityRenderToken = 0
 
     const closeCurrentSurface = () => {
       if (committing) return
@@ -581,8 +788,26 @@ export function createModals(deps: {
     previewWrap.className = 'sh-preview'
     const preview = document.createElement('img')
     preview.alt = 'Selected Shutter generation'
-    preview.addEventListener('click', () => openLightbox(imageUrlForHistoryRecord(current())))
-    previewWrap.appendChild(preview)
+    const unavailablePreview = makeUnavailablePreview()
+    preview.addEventListener('click', () => {
+      if (selectedAvailability !== 'missing' && !(selectedAvailability === 'unknown' && previewLoadFailed)) {
+        openLightbox(imageUrlForHistoryRecord(current()))
+      }
+    })
+    preview.addEventListener('load', () => {
+      previewLoadFailed = false
+      if (selectedAvailability !== 'missing') unavailablePreview.root.hidden = true
+    })
+    preview.addEventListener('error', () => {
+      previewLoadFailed = true
+      if (selectedAvailability === 'missing') setUnavailablePreview(unavailablePreview, 'missing')
+      else if (selectedAvailability === 'unknown') setUnavailablePreview(unavailablePreview, 'unknown')
+      else setUnavailablePreview(unavailablePreview, 'checking')
+      preview.hidden = true
+      unavailablePreview.root.hidden = false
+      updateHistoryActionState()
+    })
+    previewWrap.append(preview, unavailablePreview.root)
 
     const nav = document.createElement('div')
     nav.className = 'sh-hist-pill'
@@ -633,6 +858,10 @@ export function createModals(deps: {
         onClose: renderHistorySurface,
       })
 
+      // The durable Shutter prompt remains usable after the image asset is
+      // deleted, but embedded metadata requires the original image bytes.
+      if (selectedAvailability === 'missing' || getCachedImageAvailability(entry.imageId) === 'missing') return
+
       const imageUrl = imageUrlForHistoryRecord(entry)
       void resolveEmbeddedPromptForImage({ imageId: entry.imageId, path: imageUrl }, imageUrl).then(embedded => {
         if (!embedded || surface !== 'prompt' || token !== promptRenderToken || !modal.root.isConnected) return
@@ -659,15 +888,54 @@ export function createModals(deps: {
     insertBtn.textContent = 'Insert'
     insertBtn.title = 'Insert this image into its original message response'
 
+    function isSelectedImageUnavailable(): boolean {
+      return selectedAvailability === 'missing' || (selectedAvailability === 'unknown' && previewLoadFailed)
+    }
+
+    function updateHistoryActionState(): void {
+      const unavailable = isSelectedImageUnavailable()
+      closeBtn.disabled = committing
+      viewPromptBtn.disabled = committing
+      prev.disabled = committing || idx === 0
+      next.disabled = committing || idx === history.length - 1
+      replaceBtn.disabled = committing || unavailable
+      insertBtn.disabled = committing || unavailable
+      replaceBtn.title = selectedAvailability === 'missing'
+        ? 'The original image file has been deleted'
+        : selectedAvailability === 'unknown' && previewLoadFailed
+          ? 'Shutter could not verify that this image is available'
+          : 'Replace the image that opened Generation History'
+      insertBtn.title = selectedAvailability === 'missing'
+        ? 'The original image file has been deleted'
+        : selectedAvailability === 'unknown' && previewLoadFailed
+          ? 'Shutter could not verify that this image is available'
+          : 'Insert this image into its original message response'
+    }
+
     const setCommitDisabled = (disabled: boolean): void => {
       committing = disabled
-      for (const button of [closeBtn, viewPromptBtn, replaceBtn, insertBtn, prev, next]) button.disabled = disabled
+      updateHistoryActionState()
     }
 
     const commitSelected = async (replace: boolean): Promise<void> => {
       if (committing) return
       setCommitDisabled(true)
       const entry = current()
+      const availability = await checkGeneratedImageAvailability(entry.imageId, { maxAgeMs: 1_500 })
+      if (availability !== 'available') {
+        if (modal.root.isConnected) {
+          selectedAvailability = availability
+          if (availability === 'missing' || previewLoadFailed) {
+            preview.hidden = true
+            unavailablePreview.root.hidden = false
+            previewWrap.classList.add('sh-preview-unavailable')
+            setUnavailablePreview(unavailablePreview, availability === 'missing' ? 'missing' : 'unknown')
+          }
+          setCommitDisabled(false)
+        }
+        showAvailabilityToast(availability)
+        return
+      }
       const result = await comms.insertIntoMessage({
         imageId: entry.imageId,
         messageId: entry.target.messageId,
@@ -696,16 +964,49 @@ export function createModals(deps: {
     actions.append(closeBtn, viewPromptBtn, replaceBtn, insertBtn)
     container.appendChild(actions)
 
+    function applyHistoryAvailability(status: GeneratedImageAvailability): void {
+      selectedAvailability = status
+      const unavailable = status === 'missing' || (status === 'unknown' && previewLoadFailed)
+      preview.hidden = unavailable
+      unavailablePreview.root.hidden = !unavailable
+      previewWrap.classList.toggle('sh-preview-unavailable', unavailable)
+      if (unavailable) setUnavailablePreview(unavailablePreview, status === 'missing' ? 'missing' : 'unknown')
+      updateHistoryActionState()
+      if (status === 'missing') dismissLightbox()
+    }
+
+    function refreshHistoryAvailability(entry: GenerationHistoryRecord): void {
+      const token = ++availabilityRenderToken
+      previewLoadFailed = false
+      selectedAvailability = 'checking'
+      preview.hidden = false
+      unavailablePreview.root.hidden = true
+      previewWrap.classList.remove('sh-preview-unavailable')
+      updateHistoryActionState()
+
+      const cached = getCachedImageAvailability(entry.imageId)
+      if (cached) {
+        applyHistoryAvailability(cached)
+        return
+      }
+
+      void checkGeneratedImageAvailability(entry.imageId).then(status => {
+        if (token !== availabilityRenderToken || current().imageId !== entry.imageId || !modal.root.isConnected) return
+        applyHistoryAvailability(status)
+      })
+    }
+
     function render(): void {
       const entry = current()
-      preview.src = imageUrlForHistoryRecord(entry)
+      const url = imageUrlForHistoryRecord(entry)
+      refreshHistoryAvailability(entry)
+      preview.src = url
       count.textContent = `${idx + 1} / ${history.length}`
-      prev.disabled = committing || idx === 0
-      next.disabled = committing || idx === history.length - 1
       summary.textContent = formatPromptMetadataLine(promptViewFromRecord(entry))
-      if (activeLightbox) {
+      updateHistoryActionState()
+      if (activeLightbox && selectedAvailability !== 'missing') {
         const lightboxImage = activeLightbox.overlay.querySelector('img')
-        if (lightboxImage) lightboxImage.src = imageUrlForHistoryRecord(entry)
+        if (lightboxImage) lightboxImage.src = url
       }
     }
 

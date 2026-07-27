@@ -80,6 +80,47 @@ export const SHUTTER_CSS = `
     /* Image preview — matches ImageGenPanel.module.css */
     .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
+    .sh-preview.sh-preview-unavailable { cursor: default; }
+    .sh-image-unavailable[hidden] { display: none !important; }
+    .sh-image-unavailable {
+      width: 100%;
+      height: min(34vh, 340px);
+      min-height: 180px;
+      padding: 24px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--lumiverse-text-muted, #999);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
+        var(--lumiverse-bg-elevated);
+    }
+    .sh-history-body .sh-image-unavailable { height: min(36vh, 360px); }
+    .sh-image-unavailable-icon {
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--lumiverse-text-dim, #777);
+      opacity: 0.9;
+    }
+    .sh-image-unavailable-icon svg { width: 100%; height: 100%; }
+    .sh-image-unavailable-title {
+      color: var(--lumiverse-text, #eee);
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-weight: 650;
+      line-height: 1.3;
+    }
+    .sh-image-unavailable-detail {
+      max-width: 420px;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      line-height: 1.5;
+    }
 
     /* ── Generation history nav — matches SwipeControls.module.css (.bubble variant) ── */
     .sh-hist-pill { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 16px; background: var(--lumiverse-fill-heavy); border: 1px solid var(--lumiverse-border); font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace; font-size: calc(11px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); letter-spacing: 0.04em; z-index: 2; cursor: default; }

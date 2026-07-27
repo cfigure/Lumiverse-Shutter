@@ -245,8 +245,8 @@ export function createSettingsPanel(deps: {
     })
     clearHistoryRow.controlSlot.appendChild(clearHistoryBtn)
 
-    // Toast on Insert
-    const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.')
+    // Toast on Insert and Replace
+    const toastRow = makeRow('Toast on Insert and Replace', 'Show a confirmation when an image is inserted or replaced.')
     container.appendChild(toastRow.row)
     const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
       checked: s.toastOnInsert,

@@ -39,7 +39,7 @@ The counter resets after any manual or automatic generation. Auto-generate has i
 | **Widget Size** | Small, Medium, Large, or XL. |
 | **Widget Style** | Colour or Monochrome. |
 | **Icon** | Aperture, Cherry Blossom, or Kitty Lotus. |
-| **Toast on Insert** | Show a notification when Shutter inserts an image. |
+| **Toast on Insert and Replace** | Show a confirmation when Shutter inserts or replaces an image. |
 | **Remove Image Tags from Context** | Remove `![shutter](...)` text from prompts sent to the model. On by default. |
 | **Remove Confirmation** | Never, Bulk Only, or Always ask before removing images. |
 
@@ -76,6 +76,7 @@ These settings apply only when Shutter handles placement. They do not affect **I
 - Custom image layout is scoped to inline Shutter images in message content. It does not affect native attachments, uploads, pasted images, or other markdown images.
 - Shutter saves the exact positive and negative prompts returned for each successful generation while **Generation History** is enabled. Prompt View prefers that durable record and also exposes provider metadata embedded in the image as a separate source when available. In the native lightbox, **View History** is always available beside **View Prompt** and **Copy Prompt**. The widget's **Image Prompt** modal follows Shutter's existing modal layout, with **Close**, **View History**, and **Copy Prompt** in its action row. The History viewer mirrors the Image Generated modal, offers **Close**, **View Prompt**, **Replace**, and **Insert**, and replaces the exact image that opened History rather than an unrelated last image. Insert or Replace closes the underlying native lightbox.
 - Turning **Generation History** off stops new records but does not delete existing records. Use **Clear Generation History** for explicit deletion.
+- If a generated image is later deleted from Lumiverse's gallery, Shutter keeps its saved prompt and provenance. History shows an **Image unavailable** placeholder and prevents inserting or replacing with the deleted asset.
 - History uses two alternating snapshots per chat. A completed write is validated before it becomes the newest revision, so an interrupted or malformed write can fall back to the previous valid snapshot without creating a file per generation.
 - Pre-release record-and-pointer data under `history/v1` is imported in place into compact chat snapshots. The source record files are left untouched after a verified import and are removed by Clear Generation History with their old epoch.
 - Per-user history syncs between devices connected to the same Lumiverse deployment and account; it is not a cloud sync between unrelated Lumiverse servers.

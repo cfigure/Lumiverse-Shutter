@@ -538,7 +538,7 @@ export function createLightboxPromptLabel(deps: {
           <div class="sh-lightbox-prompt-content"></div>
         </div>
       </div>
-      <button class="sh-lightbox-prompt-view sh-lightbox-prompt-show" type="button" title="Show prompt details" aria-label="Show prompt details" hidden>Show Details</button>
+      <button class="sh-lightbox-prompt-view sh-lightbox-prompt-show" type="button" title="Show prompt details" aria-label="Show prompt details" hidden style="display: none;">Show Details</button>
     `, 'beforeend')
 
     // Placement is measured, not laid out: the label is fixed-positioned to
@@ -607,6 +607,7 @@ export function createLightboxPromptLabel(deps: {
     const viewBtn = wrapper.querySelector('.sh-lightbox-prompt-view') as HTMLButtonElement | null
     const collapseBtn = wrapper.querySelector('.sh-lightbox-prompt-collapse') as HTMLButtonElement | null
     const showDetailsBtn = wrapper.querySelector('.sh-lightbox-prompt-show') as HTMLButtonElement | null
+    if (showDetailsBtn) showDetailsBtn.style.display = 'none'
     let suppressPositionUntil = 0
     const suppressPositionBriefly = () => {
       suppressPositionUntil = performance.now() + 180

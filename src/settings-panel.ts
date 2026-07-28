@@ -228,7 +228,7 @@ export function createSettingsPanel(deps: {
     // records; it never silently deletes existing cross-device history.
     const clearHistoryRow = makeRow(
       'Clear Generation History',
-      'Remove saved prompts and history associations from this account. Generated images and message content are not deleted.',
+      'Remove saved prompts and history records from this account. Generated images and message content are not deleted.',
     )
     container.appendChild(clearHistoryRow.row)
     const clearHistoryBtn = document.createElement('button')
@@ -278,7 +278,7 @@ export function createSettingsPanel(deps: {
     // Remove Image Tags from Context
     const hasInterceptorPermission = deps.hasPermission('interceptor')
     const imageTagContextDescription =
-      'When enabled, Shutter removes inline-generated ![shutter](...) Markdown tags from prompts sent to the LLM.'
+      'When enabled, Shutter removes its inline ![shutter](...) image tags from prompts sent to the model.'
     const imageTagContextRow = makeRow('Remove Image Tags from Context', imageTagContextDescription)
     container.appendChild(imageTagContextRow.row)
     const removeImageTagsFromContext = ctx.components.mountSwitch(imageTagContextRow.controlSlot, {

@@ -1299,6 +1299,7 @@ export function createModals(deps: {
     const rerunBtn = document.createElement('button')
     rerunBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     rerunBtn.textContent = 'Rebuild Prompt'
+    rerunBtn.title = 'Discard edits and build a new prompt from the chat'
 
     const generateBtn = document.createElement('button')
     generateBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'

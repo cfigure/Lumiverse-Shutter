@@ -288,6 +288,7 @@ export function createModals(deps: {
       shutterView?: PromptMetadataView | null
       embeddedView?: PromptMetadataView | null
       onClose: () => void
+      dismissLabel?: 'Close' | 'Back'
       historyLabel?: string
       onViewHistory?: () => void
       onUsePrompt?: (view: PromptMetadataView) => void
@@ -357,7 +358,7 @@ export function createModals(deps: {
     const closeBtn = document.createElement('button')
     closeBtn.type = 'button'
     closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-    closeBtn.textContent = 'Close'
+    closeBtn.textContent = options.dismissLabel ?? 'Close'
     closeBtn.addEventListener('click', options.onClose)
     actions.appendChild(closeBtn)
 
@@ -863,7 +864,8 @@ export function createModals(deps: {
     const closeBtn = document.createElement('button')
     closeBtn.type = 'button'
     closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-    closeBtn.textContent = 'Close'
+    closeBtn.textContent = 'Back'
+    closeBtn.title = 'Return to the previous viewer'
     closeBtn.addEventListener('click', () => modal.dismiss())
 
     const viewPromptBtn = document.createElement('button')
@@ -888,6 +890,7 @@ export function createModals(deps: {
       renderImagePromptSurface(modal, {
         initialView: shutterView,
         onClose: renderHistorySurface,
+        dismissLabel: 'Back',
         onUsePrompt: useSelectedPrompt,
       })
 
@@ -904,6 +907,7 @@ export function createModals(deps: {
           shutterView,
           embeddedView,
           onClose: renderHistorySurface,
+          dismissLabel: 'Back',
           onUsePrompt: useSelectedPrompt,
         })
       })
@@ -1127,7 +1131,7 @@ export function createModals(deps: {
     if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 
-    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640 }) as ModalHandle
+    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true }) as ModalHandle
     activePromptViewerModal = modal
     isolateModalInput(modal)
     setImagePromptOverflow(modal, true)

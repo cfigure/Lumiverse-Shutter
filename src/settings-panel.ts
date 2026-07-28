@@ -17,6 +17,7 @@ export function createSettingsPanel(deps: {
   ctx: SpindleFrontendContext
   updateSettings: (patch: Partial<Settings>) => void
   hasPermission: (permission: string) => boolean
+  clearGenerationHistory: () => Promise<boolean>
 }) {
   const { ctx } = deps
 
@@ -29,6 +30,8 @@ export function createSettingsPanel(deps: {
   type SettingsHandles = {
     showFloatWidget: any
     toastOnInsert: any
+    generationHistory: any
+    gestureNavigation: any
     removeImageTagsFromContext: any
     showPromptInLightbox: any
     autoGenerateInterval: any
@@ -43,6 +46,7 @@ export function createSettingsPanel(deps: {
   // Conditional rows that show/hide based on other settings
   let rowWidgetSize: HTMLElement | null = null
   let rowWidgetStyle: HTMLElement | null = null
+  let rowGestureNavigation: HTMLElement | null = null
   let rowInterval: HTMLElement | null = null
   let rowRandom: HTMLElement | null = null
   let rowAutoAfter: HTMLElement | null = null
@@ -181,27 +185,100 @@ export function createSettingsPanel(deps: {
     )
     iconRow.controlSlot.appendChild(selectIconTheme)
 
-    // Toast on Insert
-    const toastRow = makeRow('Toast on Insert', 'Show a notification when an image is inserted into a message.')
-    container.appendChild(toastRow.row)
-    const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
-      checked: s.toastOnInsert,
-      onChange: (on: boolean) => deps.updateSettings({ toastOnInsert: on }),
-    })
-
     const insertionDivider = document.createElement('div')
     insertionDivider.className = 'sh-settings-divider'
     container.appendChild(insertionDivider)
 
     const insertionNote = document.createElement('div')
     insertionNote.className = 'sh-settings-note'
-    insertionNote.textContent = 'The following settings apply only when Shutter handles insertion. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
+    insertionNote.textContent = 'The following settings apply only when Shutter handles the result. They have no effect when ImageGen is set to Insert into Chat or Attach to Last Message.'
     container.appendChild(insertionNote)
+    
+    // Toast on Insert and Replace
+    const toastRow = makeRow('Toast on Insert and Replace', 'Show a confirmation when an image is inserted or replaced.')
+    container.appendChild(toastRow.row)
+    const toastOnInsert = ctx.components.mountSwitch(toastRow.controlSlot, {
+      checked: s.toastOnInsert,
+      onChange: (on: boolean) => deps.updateSettings({ toastOnInsert: on }),
+    })
+
+    // Generation History (parent)
+    const historyRow = makeRow('Generation History', 'Save successful Shutter-managed generations and their submitted prompts.')
+    container.appendChild(historyRow.row)
+    const generationHistory = ctx.components.mountSwitch(historyRow.controlSlot, {
+      checked: s.generationHistory,
+      onChange: (on: boolean) => {
+        deps.updateSettings({ generationHistory: on })
+        updateGenerationHistoryRowVisibility(on)
+      },
+    })
+
+    // Swipe & Keyboard Navigation (child — hidden while Generation History is off).
+    // Gates input channels only (touch + arrow keys), matching native's
+    // swipeGesturesEnabled: the pill chevrons work regardless.
+    const gestureNavRow = makeRow('Swipe & Keyboard Navigation', 'Navigate generation history with swipes on mobile or arrow keys on desktop.')
+    container.appendChild(gestureNavRow.row)
+    rowGestureNavigation = gestureNavRow.row
+    const gestureNavigation = ctx.components.mountSwitch(gestureNavRow.controlSlot, {
+      checked: s.gestureNavigation,
+      onChange: (on: boolean) => deps.updateSettings({ gestureNavigation: on }),
+    })
+
+    // Destructive history action. Disabling Generation History only stops new
+    // records; it never silently deletes existing cross-device history.
+    const clearHistoryRow = makeRow(
+      'Clear Generation History',
+      'Remove saved prompts and history records from this account. Generated images and message content are not deleted.',
+    )
+    container.appendChild(clearHistoryRow.row)
+    const clearHistoryBtn = document.createElement('button')
+    clearHistoryBtn.type = 'button'
+    clearHistoryBtn.className = 'sh-settings-danger-btn'
+    clearHistoryBtn.textContent = 'Clear History…'
+    clearHistoryBtn.addEventListener('click', async () => {
+      const { confirmed } = await ctx.ui.showConfirm({
+        title: 'Clear Generation History',
+        message: 'Delete all saved Shutter generation history across every chat and synced device? Generated images and images already inserted into messages will not be deleted.',
+        variant: 'danger',
+        confirmLabel: 'Clear History',
+        cancelLabel: 'Cancel',
+      })
+      if (!confirmed) return
+
+      clearHistoryBtn.disabled = true
+      clearHistoryBtn.textContent = 'Clearing…'
+      const cleared = await deps.clearGenerationHistory()
+      if (!clearHistoryBtn.isConnected) return
+      clearHistoryBtn.disabled = false
+      clearHistoryBtn.textContent = cleared ? 'Cleared' : 'Try Again'
+      ctx.sendToBackend({
+        type: 'show_toast',
+        level: cleared ? 'success' : 'error',
+        message: cleared ? 'Shutter generation history cleared.' : 'Generation history could not be cleared.',
+      })
+      setTimeout(() => {
+        if (clearHistoryBtn.isConnected) clearHistoryBtn.textContent = 'Clear History…'
+      }, 1800)
+    })
+    clearHistoryRow.controlSlot.appendChild(clearHistoryBtn)
+
+    // Show Prompt in Lightbox (requires app_manipulation)
+    const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
+    const lightboxPromptRow = makeRow(
+      'Show Prompt and History in Lightbox',
+      'Show saved prompt details and generation history for Shutter images opened in the native image viewer.',
+    )
+    container.appendChild(lightboxPromptRow.row)
+    const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {
+      checked: s.showPromptInLightbox,
+      disabled: !hasAppManipulationPermission,
+      onChange: (on: boolean) => deps.updateSettings({ showPromptInLightbox: on }),
+    })
 
     // Remove Image Tags from Context
     const hasInterceptorPermission = deps.hasPermission('interceptor')
     const imageTagContextDescription =
-      'When enabled, Shutter removes inline-generated ![shutter](...) Markdown tags from prompts sent to the LLM.'
+      'When enabled, Shutter removes its inline ![shutter](...) image tags from prompts sent to the model.'
     const imageTagContextRow = makeRow('Remove Image Tags from Context', imageTagContextDescription)
     container.appendChild(imageTagContextRow.row)
     const removeImageTagsFromContext = ctx.components.mountSwitch(imageTagContextRow.controlSlot, {
@@ -249,19 +326,6 @@ export function createSettingsPanel(deps: {
       (v) => deps.updateSettings({ shutterImageAlign: v as Settings['shutterImageAlign'] }),
     )
     imageAlignRow.controlSlot.appendChild(selectShutterImageAlign)
-
-    // Show Prompt in Lightbox (requires app_manipulation)
-    const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
-    const lightboxPromptRow = makeRow(
-      'Show Prompt in Lightbox',
-      'Show the generation prompt below Shutter images opened in the native image viewer. Reads provider metadata from Shutter-tagged images and does not store prompt history.',
-    )
-    container.appendChild(lightboxPromptRow.row)
-    const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {
-      checked: s.showPromptInLightbox,
-      disabled: !hasAppManipulationPermission,
-      onChange: (on: boolean) => deps.updateSettings({ showPromptInLightbox: on }),
-    })
 
     // After Generation — native <select>
     const afterRow = makeRow('After Generation', 'What to do after a manual generation.')
@@ -383,10 +447,13 @@ export function createSettingsPanel(deps: {
     updateFloatingWidgetRowVisibility(s.showFloatWidget)
     updateShutterImageLayoutVisibility(s.shutterImageLayout)
     updateAutoRowVisibility(s.autoGenerate)
+    updateGenerationHistoryRowVisibility(s.generationHistory)
 
     handles = {
       showFloatWidget,
       toastOnInsert,
+      generationHistory,
+      gestureNavigation,
       removeImageTagsFromContext,
       showPromptInLightbox,
       autoGenerateInterval,
@@ -400,6 +467,10 @@ export function createSettingsPanel(deps: {
   function updateFloatingWidgetRowVisibility(show: boolean) {
     if (rowWidgetSize) rowWidgetSize.style.display = show ? '' : 'none'
     if (rowWidgetStyle) rowWidgetStyle.style.display = show ? '' : 'none'
+  }
+
+  function updateGenerationHistoryRowVisibility(show: boolean) {
+    if (rowGestureNavigation) rowGestureNavigation.style.display = show ? '' : 'none'
   }
 
   function updateShutterImageLayoutVisibility(mode: Settings['shutterImageLayout']) {
@@ -423,6 +494,8 @@ export function createSettingsPanel(deps: {
     if (!handles) return
     handles.showFloatWidget.destroy()
     handles.toastOnInsert.destroy()
+    handles.generationHistory.destroy()
+    handles.gestureNavigation.destroy()
     handles.removeImageTagsFromContext.destroy()
     handles.showPromptInLightbox.destroy()
     handles.autoGenerateInterval.destroy()
@@ -433,6 +506,7 @@ export function createSettingsPanel(deps: {
     handles = null
     rowWidgetSize = null
     rowWidgetStyle = null
+    rowGestureNavigation = null
     rowInterval = null
     rowRandom = null
     rowAutoAfter = null
@@ -458,6 +532,8 @@ export function createSettingsPanel(deps: {
     // Shared components — use update()
     handles.showFloatWidget.update({ checked: s.showFloatWidget })
     handles.toastOnInsert.update({ checked: s.toastOnInsert })
+    handles.generationHistory.update({ checked: s.generationHistory })
+    handles.gestureNavigation.update({ checked: s.gestureNavigation })
     handles.autoGenerateInterval.update({ value: s.autoGenerateInterval })
     handles.autoGenerateRandomMin.update({ value: s.autoGenerateRandomMin })
     handles.autoGenerateRandomMax.update({ value: s.autoGenerateRandomMax })
@@ -478,6 +554,7 @@ export function createSettingsPanel(deps: {
     if (selectShutterImageAlign) selectShutterImageAlign.value = s.shutterImageAlign
 
     updateFloatingWidgetRowVisibility(s.showFloatWidget)
+    updateGenerationHistoryRowVisibility(s.generationHistory)
     updateShutterImageLayoutVisibility(s.shutterImageLayout)
     updateAutoRowVisibility(s.autoGenerate)
   }

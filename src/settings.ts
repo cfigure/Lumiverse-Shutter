@@ -20,6 +20,8 @@ export type ShutterIconId = (typeof SHUTTER_ICON_IDS)[number]
 export type Settings = {
   showFloatWidget: boolean
   toastOnInsert: boolean
+  generationHistory: boolean
+  gestureNavigation: boolean
   afterGenerate: 'ask_to_insert' | 'auto_insert'
   widgetSize: 'small' | 'medium' | 'large' | 'xlarge'
   widgetStyle: 'color' | 'mono'
@@ -48,6 +50,8 @@ export type Settings = {
 export const DEFAULT_SETTINGS: Settings = {
   showFloatWidget: false,
   toastOnInsert: true,
+  generationHistory: false,
+  gestureNavigation: false,
   afterGenerate: 'ask_to_insert',
   widgetSize: 'small',
   widgetStyle: 'color',

@@ -6,6 +6,7 @@ import { createComms } from './comms'
 import { createLightboxPromptLabel } from './lightbox'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
+import type { GenerationHistoryRecord, GenerationOrigin, GenerationTarget } from './history'
 
 // ── Types ──
 
@@ -15,6 +16,9 @@ export type GenerationResult = {
   handledByNative: boolean
   prompt: string
   negativePrompt: string
+  promptMode: string
+  provider?: string
+  model?: string
 }
 
 // Native ImageGen returns { generated: false, reason } when the scene hasn't
@@ -33,6 +37,12 @@ const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72,
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
 const LONG_PRESS_MS = 500
+const PERMISSION_LABELS: Record<string, string> = {
+  chat_mutation: 'Chat Mutation',
+  ui_panels: 'UI Panels',
+  interceptor: 'Interceptor',
+  app_manipulation: 'App Manipulation',
+}
 
 // ── Helpers ──
 
@@ -203,7 +213,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (missing.length === 0) return
     ctx.ui.showConfirm({
       title: 'Permissions Required',
-      message: `Shutter needs: ${missing.join(', ')}. Interceptor access removes Shutter Markdown image tags from model prompts. App Manipulation access shows the generation prompt below Shutter images in the native lightbox.`,
+      message: `Shutter needs: ${missing.map(p => PERMISSION_LABELS[p] ?? p).join(', ')}. Interceptor access removes Shutter Markdown image tags from model prompts. App Manipulation access shows prompt and history controls below Shutter images in the native lightbox.`,
       variant: 'info',
       confirmLabel: 'Grant',
       cancelLabel: 'Not Now',
@@ -236,11 +246,57 @@ export function setup(ctx: SpindleFrontendContext) {
     ctx,
     updateSettings,
     hasPermission: (p) => grantedPermissions.has(p),
+    clearGenerationHistory: () => comms.clearGenerationHistory(),
   })
 
   // ── Native ImageGen ──
 
   let cachedNativeSettings: Record<string, any> | null = null
+  let cachedImageProviderLabels: Map<string, string> | null = null
+
+  type ImageGenerationSource = {
+    providerId: string
+    model: string
+  }
+
+  async function fetchJsonBestEffort(url: string, timeoutMs = 2000): Promise<any | null> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetch(url, { signal: controller.signal })
+      if (!response.ok) return null
+      return await response.json()
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  async function getImageProviderLabels(): Promise<Map<string, string>> {
+    if (cachedImageProviderLabels) return cachedImageProviderLabels
+    const data = await fetchJsonBestEffort('/api/v1/image-gen-connections/providers')
+    const labels = new Map<string, string>()
+    if (Array.isArray(data?.providers)) {
+      for (const provider of data.providers) {
+        if (typeof provider?.id === 'string' && typeof provider?.name === 'string') {
+          labels.set(provider.id, provider.name)
+        }
+      }
+    }
+    if (labels.size > 0) cachedImageProviderLabels = labels
+    return labels
+  }
+
+  async function resolveImageGenerationSource(connectionId: unknown): Promise<ImageGenerationSource | null> {
+    if (typeof connectionId !== 'string' || !connectionId) return null
+    const connection = await fetchJsonBestEffort(`/api/v1/image-gen-connections/${encodeURIComponent(connectionId)}`)
+    if (!connection || typeof connection.provider !== 'string') return null
+    return {
+      providerId: connection.provider,
+      model: typeof connection.model === 'string' ? connection.model : '',
+    }
+  }
 
 // Raw fetch is deliberate; see the note above callImageGen below.
   async function fetchNativeSettings(): Promise<Record<string, any>> {
@@ -250,7 +306,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       const data = await resp.json()
       const s = data?.value
-      if (!s || typeof s !== 'object') throw new Error('Native ImageGen settings were not returned.')
+      if (!s || typeof s !== 'object') throw new Error('No settings were found.')
 
       cachedNativeSettings = s
       return s
@@ -266,22 +322,25 @@ export function setup(ctx: SpindleFrontendContext) {
   // (spindle.imageGen is the connection-profile API, a different pipeline),
   // and they authenticate via the user's browser session, which the backend
   // subprocess does not have.
-  async function callImageGen(chatId: string, overrides?: Record<string, any>): Promise<GenerationResult | GenerationSkipped> {
+  async function callImageGen(
+    chatId: string,
+    overrides?: Record<string, any>,
+    target?: GenerationTarget,
+  ): Promise<GenerationResult | GenerationSkipped> {
     const native = await fetchNativeSettings()
-    // No forceGeneration override (removed in 1.0.6): the ...native spread
-    // carries the user's native forceGeneration setting (UI label: "Ignore
-    // Scene Change Detection"), and the server ORs the request flag with its
-    // own stored setting anyway, so generation follows the native ImageGen
-    // panel exactly.
+    const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
+    const providerLabelsPromise = getImageProviderLabels()
     const body: Record<string, any> = {
       ...native,
       ...overrides,
       chatId,
     }
 
-    if (body.outputTarget === 'attach_to_message' && !body.attachToMessageId) {
-      const lastId = await comms.resolveLastMessageId(chatId)
-      if (lastId) body.attachToMessageId = lastId
+    // Pin native attach-to-message mode to the same response that owns the
+    // Shutter history. This prevents a new trailing message from retargeting
+    // an in-flight generation.
+    if (body.outputTarget === 'attach_to_message' && target) {
+      body.attachToMessageId = target.messageId
     }
 
     const resp = await fetch('/api/v1/image-gen/generate', {
@@ -294,13 +353,22 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!result.generated) {
       return { skipped: true, reason: result.reason || 'Scene has not changed enough' }
     }
-    if (!result.imageId) throw new Error('Image generated but not persisted')
+    if (!result.imageId) throw new Error('The image was generated but could not be saved.')
+
+    const providerId = typeof result.provider === 'string' ? result.provider : ''
+    const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise])
+    const provider = providerId ? (providerLabels.get(providerId) || '') : ''
+    const model = source && source.providerId === providerId ? source.model : ''
+
     return {
       imageId: result.imageId,
       imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
       negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
+      promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
+      provider: provider || undefined,
+      model: model || undefined,
     }
   }
 
@@ -328,11 +396,17 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Lightbox prompt label (1.0.6) ── moved whole to lightbox.ts
 
+  // The lightbox is constructed before the modal factory below. Keep a tiny
+  // indirection so its expanded View History action can open the shared
+  // history viewer without changing the compact mobile pill or construction
+  // order.
+  let openHistoryFromLightbox: (records: GenerationHistoryRecord[], imageId: string, closeUnderlyingLightbox?: () => void) => void = () => {}
   const lightboxPromptLabel = createLightboxPromptLabel({
     ctx,
     comms,
     getSettings: () => settings,
     hasPermission: (p) => grantedPermissions.has(p),
+    openHistory: (records, imageId, closeUnderlyingLightbox) => openHistoryFromLightbox(records, imageId, closeUnderlyingLightbox),
   })
 
   // ── Post-generation handling ──
@@ -352,23 +426,59 @@ export function setup(ctx: SpindleFrontendContext) {
     updateFloatBtnState()
   }
 
-  function handleGenerationResult(result: GenerationResult, messageId: string, chatId: string, isAuto: boolean, replace = false) {
+  async function handleGenerationResult(
+    result: GenerationResult,
+    target: GenerationTarget,
+    isAuto: boolean,
+    replace = false,
+    origin: GenerationOrigin = isAuto ? 'auto' : 'manual',
+  ): Promise<void> {
     setGeneratingState(false)
     resetAutoGenCounter()
 
+    // Native output modes own their own UI/insertion. Generation History is a
+    // Shutter-specific feature, so only Shutter-managed results are recorded.
     if (result.handledByNative) return
+
+    let history: GenerationHistoryRecord[] = []
+    if (settings?.generationHistory) {
+      history = await comms.appendGenerationHistory(target, {
+        imageId: result.imageId,
+        prompt: result.prompt,
+        negativePrompt: result.negativePrompt,
+        promptMode: result.promptMode,
+        origin,
+        provider: result.provider,
+        model: result.model,
+      })
+    }
 
     const afterAction = isAuto ? settings?.autoGenerateAfter : settings?.afterGenerate
     if (afterAction === 'auto_insert') {
-      ctx.sendToBackend({ type: 'insert_into_message', imageId: result.imageId, messageId, chatId, replace })
+      ctx.sendToBackend({
+        type: 'insert_into_message',
+        imageId: result.imageId,
+        messageId: target.messageId,
+        chatId: target.chatId,
+        target,
+        replace,
+      })
     } else {
-      modals.openDestinationModal(result.imageId, result.imageUrl, messageId, chatId, result.prompt, result.negativePrompt, isAuto, replace)
+      modals.openDestinationModal(result, target, isAuto, replace, history)
     }
   }
 
   // ── Generate ──
 
-  async function triggerGenerate(messageId?: string, chatId?: string, isAuto = false, replace = false, force = false) {
+  async function triggerGenerate(
+    messageId?: string,
+    chatId?: string,
+    isAuto = false,
+    replace = false,
+    force = false,
+    pinnedTarget?: GenerationTarget,
+    origin: GenerationOrigin = isAuto ? 'auto' : 'manual',
+  ) {
     if (generating || modals.isPromptPreviewOpen()) return
 
     if (!chatId) {
@@ -380,19 +490,15 @@ export function setup(ctx: SpindleFrontendContext) {
     setGeneratingState(true)
 
     try {
+      const target = pinnedTarget ?? await comms.resolveGenerationTarget(chatId, messageId || '__last__')
+      if (!target) throw new Error('No message response is available for this generation.')
+
       const native = await fetchNativeSettings()
       const outputTarget = native.outputTarget || 'background'
 
-      if (isAuto) {
-        // Shutter's automation only owns inline/manual insertion. If native
-        // ImageGen is configured to insert into chat or attach to the last
-        // message, let the native path handle that mode instead. Do not skip
-        // merely because native Auto-Generate is enabled: many users leave
-        // that setting on while using Shutter for inline/background automation.
-        if (outputTarget === 'chat_attachment' || outputTarget === 'attach_to_message') {
-          setGeneratingState(false)
-          return
-        }
+      if (isAuto && (outputTarget === 'chat_attachment' || outputTarget === 'attach_to_message')) {
+        setGeneratingState(false)
+        return
       }
 
       const showPreview = native.previewPromptBeforeGenerate
@@ -401,38 +507,24 @@ export function setup(ctx: SpindleFrontendContext) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, chatId, messageId, isAuto, replace)
+          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin)
         } catch (err: any) {
           setGeneratingState(false)
           if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))
         }
         return
       }
-      
-      // '__last__' is resolved backend-side at execution time, never earlier.
-      // Do not pre-resolve to a concrete ID in the frontend; see the design
-      // note above resolveTarget() in backend.ts.
-      //
-      // `force` is a per-press override from the advanced menu ("Force
-      // Generate"), mirroring native's Force Generate button. It is not
-      // threaded into the prompt-preview path above because that path's
-      // Generate uses skipParse (custom prompt mode server-side), which
-      // never runs the scene gate — it is effectively always forced.
-      const result = await callImageGen(chatId, force ? { forceGeneration: true } : undefined)
+
+      const result = await callImageGen(chatId, force ? { forceGeneration: true } : undefined, target)
       if ('skipped' in result) {
-        // Deliberately does NOT reset the auto-gen counter: a skipped auto
-        // attempt should retry on the next AI message, when the scene may
-        // have changed. Auto skips are silent, matching error suppression.
         setGeneratingState(false)
         if (!isAuto) notifyGenerationSkipped(result.reason)
         return
       }
-      handleGenerationResult(result, messageId || '__last__', chatId, isAuto, replace)
+      await handleGenerationResult(result, target, isAuto, replace, origin)
     } catch (err: any) {
       setGeneratingState(false)
-      if (!isAuto) {
-        modals.showErrorModal(parseErrorMessage(err.message))
-      }
+      if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))
     }
   }
 
@@ -525,6 +617,7 @@ export function setup(ctx: SpindleFrontendContext) {
         { key: 'replace', label: 'Replace' },
         ...(showForce ? [{ key: 'force', label: 'Force Generate' }] : []),
         { key: 'div_vp', label: '', type: 'divider' },
+        ...(settings?.generationHistory ? [{ key: 'insert', label: 'Insert' }] : []),
         { key: 'view_prompt', label: 'View Prompt' },
         { key: 'div1', label: '', type: 'divider' },
         { key: 'delete', label: 'Remove', danger: true },
@@ -535,6 +628,41 @@ export function setup(ctx: SpindleFrontendContext) {
     if (selectedKey === 'append') triggerGenerate()
     else if (selectedKey === 'replace') triggerGenerate(undefined, undefined, false, true)
     else if (selectedKey === 'force') triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace', true)
+    else if (selectedKey === 'insert') {
+      const chatId = ctx.getActiveChat()?.chatId ?? undefined
+      if (!chatId) return
+      const [target, currentTag] = await Promise.all([
+        comms.resolveGenerationTarget(chatId, '__last__'),
+        comms.resolveShutterTag(chatId, '__last__', -1),
+      ])
+      const history = target ? await comms.getGenerationHistory(target) : []
+      if (history.length === 0) {
+        ctx.sendToBackend({
+          type: 'show_toast',
+          level: 'info',
+          message: 'No generation history is available for the last message.',
+        })
+        return
+      }
+      const newest = history.reduce((latest, entry) =>
+        entry.createdAt > latest.createdAt
+          || (
+            entry.createdAt === latest.createdAt
+            && entry.imageId.localeCompare(latest.imageId) > 0
+          )
+          ? entry
+          : latest,
+      )
+      const initialImageId =
+        currentTag && history.some(entry => entry.imageId === currentTag.imageId)
+          ? currentTag.imageId
+          : newest.imageId
+      
+      modals.openHistoryViewer(history, initialImageId, {
+        dismissLabel: 'Close',
+        replaceImageId: null,
+      })      
+    }
     else if (selectedKey === 'view_prompt') modals.viewLastPrompt()
     else if (selectedKey === 'delete') deleteImage()
     else if (selectedKey === 'delete_all') deleteAllImages()
@@ -690,12 +818,21 @@ export function setup(ctx: SpindleFrontendContext) {
     notifyGenerationSkipped,
     parseErrorMessage,
   })
+  openHistoryFromLightbox = (records, imageId, closeUnderlyingLightbox) => modals.openHistoryViewer(records, imageId, {
+    closeUnderlyingLightbox,
+  })
 
   // ── Backend messages ──
 
   const unsubBackend = ctx.onBackendMessage((payload: any) => {
-    // Round-trip replies (last_message_id, shutter_tag) are consumed by comms.
+    // Round-trip replies are consumed by comms.
     if (comms.handleBackendMessage(payload)) return
+
+    if (payload.type === 'generation_history_cleared') {
+      lightboxPromptLabel.onHistoryCleared()
+      modals.onHistoryCleared()
+      return
+    }
 
     if (payload.type !== 'settings') return
 

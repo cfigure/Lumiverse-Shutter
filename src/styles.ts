@@ -30,6 +30,24 @@ export const SHUTTER_CSS = `
     .sh-setting-control { flex-shrink: 0; }
     .sh-settings-divider { border-top: 1px solid var(--lumiverse-border); margin: 10px 0 8px; }
     .sh-settings-note { font-size: calc(11.5px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); line-height: 1.45; margin: 0 0 6px; }
+    .sh-settings-danger-btn {
+      flex-shrink: 0;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #e55) 45%, var(--lumiverse-border));
+      background: color-mix(in srgb, var(--lumiverse-danger, #e55) 10%, transparent);
+      color: var(--lumiverse-danger, #e55);
+      font: inherit;
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+    }
+    .sh-settings-danger-btn:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--lumiverse-danger, #e55) 18%, transparent);
+      border-color: var(--lumiverse-danger, #e55);
+    }
+    .sh-settings-danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .sh-auto-section { margin-top: 10px; }
     .sh-range-row { display: flex; align-items: center; gap: 6px; }
     .sh-range-label { font-size: calc(12px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-muted); }
@@ -47,10 +65,90 @@ export const SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
+    /* Keep Generation History metadata to one line so long provider or model
+    names cannot increase the modal height. Full details remain available
+    in Image Prompt. */
+    .sh-generation-meta {
+      min-width: 0;
+      padding: 0 2px 2px;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
     /* Image preview — matches ImageGenPanel.module.css */
-    .sh-preview { border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
+    .sh-preview { position: relative; border: 1px solid var(--lumiverse-border); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--lumiverse-bg-elevated); }
     .sh-preview img { display: block; width: 100%; max-height: min(34vh, 340px); object-fit: contain; }
+    /* Missing-image presentation is deliberately compact and participates in
+       normal layout. It does not preserve the broken image's dimensions or
+       overlay an invisible image. */
+    .sh-preview > img[hidden] { display: none !important; }
+    .sh-preview.sh-preview-unavailable { cursor: default; }
+    .sh-image-unavailable[hidden] { display: none !important; }
+    .sh-image-unavailable {
+      width: 100%;
+      height: min(24vh, 180px);
+      min-height: 0;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      text-align: center;
+      color: var(--lumiverse-text-muted, #999);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255,255,255,0.05)) 65%, transparent), transparent),
+        var(--lumiverse-bg-elevated);
+    }
+    .sh-image-unavailable-icon {
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--lumiverse-text-dim, #777);
+      opacity: 0.9;
+    }
+    .sh-image-unavailable-icon svg { width: 100%; height: 100%; }
+    .sh-image-unavailable-title {
+      color: var(--lumiverse-text, #eee);
+      font-size: calc(15px * var(--lumiverse-font-scale, 1));
+      font-weight: 650;
+      line-height: 1.3;
+    }
+    .sh-image-unavailable-detail {
+      width: min(420px, calc(100% - 24px));
+      font-size: calc(12px * var(--lumiverse-font-scale, 1));
+      line-height: 1.5;
+    }
+
+    /* ── Generation history nav — matches SwipeControls.module.css (.bubble variant) ── */
+    .sh-hist-pill { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px 4px; border-radius: 16px; background: var(--lumiverse-fill-heavy); border: 1px solid var(--lumiverse-border); font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace; font-size: calc(11px * var(--lumiverse-font-scale, 1)); color: var(--lumiverse-text-dim); letter-spacing: 0.04em; z-index: 2; cursor: default; }
+    .sh-hist-btn { position: relative; display: flex; align-items: center; justify-content: center; width: var(--lumiverse-btn-icon-sm, 24px); height: var(--lumiverse-btn-icon-sm, 24px); padding: 0; background: transparent; border: none; border-radius: 6px; color: var(--lumiverse-text-dim); cursor: pointer; transition: all var(--lumiverse-transition-fast, 0.15s); }
+    /* Invisible hit-area extension: ~40px effective touch target while the
+       visual stays at native SwipeControls size. */
+    .sh-hist-btn::after { content: ''; position: absolute; inset: -8px; }
+    .sh-hist-btn:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+    .sh-hist-btn:disabled { color: var(--lumiverse-text-hint); opacity: 1; cursor: default; }
+    .sh-hist-btn svg { width: 16px; height: 16px; }
+    .sh-hist-counter { min-width: 32px; text-align: center; user-select: none; font-variant-numeric: tabular-nums; }
+    /* Mobile: same position, reduced chrome weight (type unchanged — Shutter's
+       type scale is universal; layout adapts, fonts don't). Buttons/icons/
+       padding shrink ~18%; expanded hit-areas hold ~40px touch targets.
+       Breakpoint matches the modal's action-grid pivot below. */
+    @media (max-width: 560px) {
+      .sh-hist-pill { right: 6px; bottom: 6px; gap: 1px; padding: 2px 3px; border-radius: 14px; }
+      .sh-hist-btn { width: 20px; height: 20px; }
+      .sh-hist-btn::after { inset: -10px; }
+      .sh-hist-btn svg { width: 14px; height: 14px; }
+      .sh-hist-counter { min-width: 26px; }
+    }
 
     /* ── Lightbox — matches ImageLightbox.module.css ── */
     .sh-lightbox { position: fixed; inset: 0; width: var(--app-scaled-viewport-width, 100vw); height: var(--app-scaled-viewport-height, 100vh); z-index: 10003; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--lumiverse-modal-backdrop, rgba(0,0,0,0.8)); cursor: pointer; }
@@ -137,6 +235,82 @@ export const SHUTTER_CSS = `
       padding: 8px 0;
     }
 
+    /* Compact source controls shared by the Image Prompt modal and the
+       expanded lightbox prompt area. */
+    .sh-prompt-source-tabs {
+      display: inline-flex;
+      align-items: center;
+      align-self: flex-start;
+      width: fit-content;
+      max-width: 100%;
+      gap: 6px;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+    }
+    .sh-prompt-source-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      min-width: 0;
+      padding: 2px 10px;
+      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
+      border-radius: var(--lcs-radius-sm, 6px);
+      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
+      color: var(--lumiverse-text-muted, #999);
+      font: inherit;
+      font-size: calc(10px * var(--lumiverse-font-scale, 1));
+      font-weight: 600;
+      line-height: 1.4;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+    }
+    .sh-prompt-source-btn:hover {
+      color: var(--lumiverse-text, #eee);
+      border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
+    }
+    .sh-prompt-source-btn.sh-active {
+      background: var(--lumiverse-fill-heavy, rgba(255,255,255,0.1));
+      border-color: var(--lumiverse-primary-020, rgba(147,112,219,0.2));
+      color: var(--lumiverse-text, #eee);
+    }
+    .sh-prompt-source-meta {
+      margin-bottom: 8px;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+      line-height: 1.4;
+    }
+    .sh-prompt-source-fields { display: flex; flex-direction: column; gap: 12px; }
+
+    /* Image Prompt keeps Shutter's established prompt-modal structure. The
+       host body is made non-scrolling in code; only these read-only prompt
+       boxes scroll internally, leaving the standard footer visible. */
+    .sh-image-prompt-root { width: 100%; min-height: 0; }
+    .sh-image-prompt-body { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-meta {
+      margin: -2px 0 0;
+      color: var(--lumiverse-text-muted, #999);
+      font-size: calc(11px * var(--lumiverse-font-scale, 1));
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .sh-image-prompt-fields { min-height: 0; overflow: hidden; gap: 14px; }
+    .sh-image-prompt-readonly { box-sizing: border-box; cursor: text; background: rgba(255, 255, 255, 0.018); border-color: rgba(255, 255, 255, 0.10); border-radius: 10px; }
+    .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
+    .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
+    .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }
+    .sh-image-prompt-actions { flex: 0 0 auto; }
+    @media (max-height: 520px) {
+      .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 92px; }
+      .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 52px; }
+      .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 156px; }
+    }
+
     /* ── Lightbox prompt label (injected at BODY level, not into the
        portal) ── The wrapper is fixed-positioned via JS and deliberately
        lives outside the native lightbox subtree: the glass-mode backdrop
@@ -144,6 +318,9 @@ export const SHUTTER_CSS = `
        Chromium re-capture the blur (intermittent unblurred-frame flash).
        See the injection site in decorateLightbox. */
     .sh-lightbox-prompt {
+      width: fit-content;
+      min-width: 0;
+      max-width: calc(var(--app-scaled-viewport-width, 100vw) - 24px);
       max-height: 156px;
       overflow: hidden;
       display: flex;
@@ -192,14 +369,13 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt-heading {
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
       color: var(--lumiverse-text-muted, #999);
       padding-bottom: 4px;
       margin-bottom: 4px;
       border-bottom: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       display: flex;
       align-items: center;
+      justify-content: center;
       flex: 0 0 auto;
     }
     .sh-lightbox-prompt-scroll {
@@ -213,41 +389,14 @@ export const SHUTTER_CSS = `
       touch-action: pan-y;
       flex: 1 1 auto;
     }
-    .sh-lightbox-prompt-copy {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-      flex-shrink: 0;
-      margin-left: auto;
-      padding: 2px 8px;
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 6px);
-      color: var(--lumiverse-text-muted, #999);
-      font-size: calc(10px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      line-height: 1.4;
-      cursor: pointer;
-    }
-    .sh-lightbox-prompt-copy:hover { color: var(--lumiverse-text, #eee); border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
-    .sh-lightbox-prompt-copy.sh-copied,
-    .sh-lightbox-prompt-copy.sh-copied:hover {
-      color: var(--lumiverse-success, #4ade80);
-      border-color: var(--lumiverse-success, #4ade80);
-    }
-    /* Slots for host-rendered shared components (mountCloseButton /
-       mountSpinner) — the components own their internal styling so the
-       label tracks native design automatically. */
-    .sh-lightbox-prompt-close-slot {
-      display: inline-flex;
-      align-items: center;
-      margin-left: 8px;
-    }
+    /* The spinner remains host-rendered; Hide uses Shutter's standard
+       compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
+    .sh-lightbox-prompt-content > .sh-lightbox-prompt-heading {
+      justify-content: flex-start;
+      text-align: left;
+    }
     .sh-lightbox-prompt-content .sh-lightbox-prompt-text { margin-bottom: 10px; }
     .sh-lightbox-prompt-text:last-child { margin-bottom: 0; }
     .sh-lightbox-prompt-text { white-space: pre-wrap; word-break: break-word; }
@@ -260,9 +409,6 @@ export const SHUTTER_CSS = `
     }
 
     .sh-lightbox-prompt [hidden] { display: none !important; }
-    .sh-lightbox-prompt-title {
-      flex: 0 0 auto;
-    }
     .sh-lightbox-prompt-status {
       display: inline-flex;
       align-items: center;
@@ -282,58 +428,98 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt-actions {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      margin-left: auto;
-      flex: 0 0 auto;
-    }
-    .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
+      gap: 6px;
       margin-left: 0;
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
+    .sh-lightbox-prompt-copy,
+    .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
-    .sh-lightbox-prompt-collapse {
+    .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt-close {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
       white-space: nowrap;
       flex-shrink: 0;
       margin-left: 0;
-      padding: 2px 8px;
+      padding: 4px 8px;
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);
       color: var(--lumiverse-text-muted, #999);
       font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
       line-height: 1.4;
       cursor: pointer;
     }
+    .sh-lightbox-prompt-copy:hover,
+    .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
-    .sh-lightbox-prompt-collapse:hover {
+    .sh-lightbox-prompt-collapse:hover,
+    .sh-lightbox-prompt-close:hover {
       color: var(--lumiverse-text, #eee);
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
     }
+    .sh-lightbox-prompt-copy.sh-copied,
+    .sh-lightbox-prompt-copy.sh-copied:hover {
+      color: var(--lumiverse-success, #4ade80);
+      border-color: var(--lumiverse-success, #4ade80);
+    }
     .sh-lightbox-prompt.sh-pill {
+      width: 100%;
+      min-width: 0;
       height: var(--sh-prompt-pill-height, 44px);
       max-height: var(--sh-prompt-pill-height, 44px);
       min-height: var(--sh-prompt-pill-height, 44px);
-      padding: 8px 12px;
+      padding: 7px 9px;
       justify-content: center;
+      white-space: nowrap;
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-heading {
       width: 100%;
+      min-width: 0;
+      justify-content: center;
       padding-bottom: 0;
       margin-bottom: 0;
       border-bottom: 0;
-      gap: 10px;
+      gap: 6px;
+      flex-wrap: nowrap;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-actions {
+      width: auto;
+      min-width: 0;
+      justify-content: center;
+      gap: 5px;
+      margin-left: 0;
+      flex-wrap: nowrap;
+    }
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-history,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-view,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
+    .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
+      font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {
       display: none !important;
     }
     .sh-lightbox-prompt.sh-expanded {
+      width: 100%;
       height: auto;
       min-height: 0;
+    }
+    .sh-lightbox-prompt-source-row {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    .sh-lightbox-prompt-source-row .sh-prompt-source-tabs {
+      margin: 0;
     }
     .sh-lightbox-prompt.sh-expanded .sh-lightbox-prompt-heading {
       gap: 8px;

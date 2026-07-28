@@ -375,6 +375,11 @@ export function createLightboxPromptLabel(deps: {
     // height ALONGSIDE the native class's own max-height (both caps apply;
     // the smaller wins), so native sizing is added to, never replaced.
     let promptExpanded = false
+    // Hide is reversible for the lifetime of this native viewer. While hidden,
+    // the image's caption reserve is fully released and only a small overlay
+    // restore control remains; reopening restores the previous pill/expanded
+    // state without re-reading metadata.
+    let promptHidden = false
     // Content-aware expanded reserve: measured from the panel's real rendered
     // height (clamped to the adaptive cap) by refreshExpandedReserve, so a
     // four-line prompt barely costs the image anything and only a genuinely
@@ -438,6 +443,9 @@ export function createLightboxPromptLabel(deps: {
       if (!img.isConnected) return
       img.style.maxBlockSize = originalMaxBlockSize
       img.style.marginBlockEnd = originalMarginBlockEnd
+      // A later Show Details pass must judge the native, fully restored rect,
+      // not treat it as the echo of an old Shutter cap.
+      lastReserveCapTerm = null
     }
     const restoreReserve = (mode: 'now' | 'after-close') => {
       if (mode === 'now') {
@@ -501,9 +509,9 @@ export function createLightboxPromptLabel(deps: {
     // Inject a stable shell immediately — or, when metadata already settled,
     // the finished label directly. The shell avoids the jarring delayed box
     // pop-in while metadata is fetched/parsing, without blocking the native
-    // lightbox image or storing any prompt data. The Close action uses the
-    // same compact button treatment as the rest of Shutter's lightbox row;
-    // the loading indicator remains Lumiverse's shared spinner.
+    // lightbox image or storing any prompt data. Hide is reversible through
+    // a sibling Show Details overlay, so releasing the caption reserve does
+    // not make the prompt inaccessible for the rest of the viewer session.
     //
     // BODY-LEVEL ON PURPOSE — do not move this back inside the portal. In
     // glass mode the native backdrop carries backdrop-filter: blur(), and in
@@ -523,13 +531,14 @@ export function createLightboxPromptLabel(deps: {
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>Prompt</button>
             <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
-            <button class="sh-lightbox-prompt-close" type="button" title="Hide prompt controls" aria-label="Hide prompt controls">Hide</button>
+            <button class="sh-lightbox-prompt-close" type="button" title="Hide prompt details" aria-label="Hide prompt details">Hide</button>
           </span>
         </div>
         <div class="sh-lightbox-prompt-scroll" hidden>
           <div class="sh-lightbox-prompt-content"></div>
         </div>
       </div>
+      <button class="sh-lightbox-prompt-view sh-lightbox-prompt-show" type="button" title="Show prompt details" aria-label="Show prompt details" hidden>Show Details</button>
     `, 'beforeend')
 
     // Placement is measured, not laid out: the label is fixed-positioned to
@@ -597,22 +606,23 @@ export function createLightboxPromptLabel(deps: {
     const historyBtn = wrapper.querySelector('.sh-lightbox-prompt-history') as HTMLButtonElement | null
     const viewBtn = wrapper.querySelector('.sh-lightbox-prompt-view') as HTMLButtonElement | null
     const collapseBtn = wrapper.querySelector('.sh-lightbox-prompt-collapse') as HTMLButtonElement | null
+    const showDetailsBtn = wrapper.querySelector('.sh-lightbox-prompt-show') as HTMLButtonElement | null
     let suppressPositionUntil = 0
     const suppressPositionBriefly = () => {
       suppressPositionUntil = performance.now() + 180
     }
 
-    // 'closing' is the default on purpose: every dismissal except the pill's
-    // own ✕ is a teardown where the native viewer is going (or already gone)
-    // away, and eagerly restoring the image size there is exactly the
-    // grow-then-vanish flash. restoreReserve('after-close') handles the "the
-    // close never actually landed" edge with its grace timeout.
-    function dismissLabel(reason: 'hide' | 'closing' = 'closing'): void {
+    // 'closing' is the default on purpose: normal teardown means the native
+    // viewer is going (or already gone) away, and eagerly restoring the image
+    // size there creates a grow-then-vanish flash. The 'empty' path is the one
+    // exception: metadata resolved to nothing while the viewer remains open,
+    // so the image should reclaim the reserved strip immediately.
+    function dismissLabel(reason: 'empty' | 'closing' = 'closing'): void {
       if (dismissed) return
       dismissed = true
       if (activeLabel && activeLabel.dismiss === dismissLabel) activeLabel = null
       for (const fn of cleanupFns) fn()
-      restoreReserve(reason === 'hide' ? 'now' : 'after-close')
+      restoreReserve(reason === 'empty' ? 'now' : 'after-close')
       ctx.dom.uninject(wrapper)
     }
     activeLabel = { img, dismiss: dismissLabel }
@@ -712,6 +722,30 @@ export function createLightboxPromptLabel(deps: {
       const rectWidth = rect.width / uiScale
       const rectHeight = rect.height / uiScale
       const viewportWidthLocal = window.innerWidth / uiScale
+      const viewportHeightLocal = window.innerHeight / uiScale
+
+      if (promptHidden && showDetailsBtn) {
+        // The restore control is an overlay, not a caption row: it occupies no
+        // layout space and therefore leaves the native image at its full size.
+        // offsetWidth/Height are local CSS pixels, matching the zoom-corrected
+        // rect values used by the rest of this function.
+        const buttonWidth = showDetailsBtn.offsetWidth || 96
+        const buttonHeight = showDetailsBtn.offsetHeight || 28
+        const inset = EDGE
+        const anchorRight = rectWidth > 0 ? rectLeft + rectWidth - inset : viewportWidthLocal - EDGE
+        const anchorBottom = rectHeight > 0 ? rectBottom - inset : viewportHeightLocal - EDGE
+        const left = Math.max(EDGE, Math.min(anchorRight - buttonWidth, viewportWidthLocal - buttonWidth - EDGE))
+        const top = Math.max(EDGE, Math.min(anchorBottom - buttonHeight, viewportHeightLocal - buttonHeight - EDGE))
+
+        setStyleIfChanged(ws, 'width', `${buttonWidth}px`)
+        setStyleIfChanged(ws, 'min-width', '0px')
+        setStyleIfChanged(ws, 'max-width', `${buttonWidth}px`)
+        setStyleIfChanged(ws, 'top', `${top}px`)
+        setStyleIfChanged(ws, 'left', `${left}px`)
+        setStyleIfChanged(ws, 'transform', '')
+        return
+      }
+
       const isExpanded = labelEl?.classList.contains('sh-expanded') ?? promptExpanded
       const promptMaxHeight = isExpanded ? getPromptMaxHeight(rectHeight > 0 ? rectHeight : undefined) : PROMPT_PILL_HEIGHT
       const isCompact = isCompactPromptLayout()
@@ -796,8 +830,10 @@ export function createLightboxPromptLabel(deps: {
     // reserve in BOTH states before the scheduled reposition reads the image
     // rect. refreshExpandedReserve is hoisted (declared below).
     const onWindowResize = (): void => {
-      if (promptExpanded) refreshExpandedReserve()
-      applyImageReserve()
+      if (!promptHidden) {
+        if (promptExpanded) refreshExpandedReserve()
+        applyImageReserve()
+      }
       schedulePosition()
     }
     window.addEventListener('resize', onWindowResize)
@@ -808,7 +844,7 @@ export function createLightboxPromptLabel(deps: {
     // native viewer keeps the img at opacity 0 until load, so a correction
     // here lands before the reveal.
     const onImgLoad = () => {
-      applyImageReserve()
+      if (!promptHidden) applyImageReserve()
       schedulePosition()
     }
     img.addEventListener('load', onImgLoad)
@@ -972,8 +1008,32 @@ export function createLightboxPromptLabel(deps: {
       positionLabel()
     }
 
+    function setPromptHidden(hidden: boolean): void {
+      if (!promptEl || !showDetailsBtn || promptHidden === hidden) return
+      promptHidden = hidden
+      promptEl.hidden = hidden
+      promptEl.style.display = hidden ? 'none' : ''
+      promptEl.setAttribute('aria-hidden', hidden ? 'true' : 'false')
+      showDetailsBtn.hidden = !hidden
+      showDetailsBtn.style.display = hidden ? 'inline-flex' : 'none'
+
+      if (hidden) {
+        // Release both the inline cap/margin and the click-time reserve rule;
+        // the native image immediately reclaims its complete viewer area.
+        restoreReserve('now')
+      } else {
+        // Preserve whether the user hid the collapsed pill or expanded panel.
+        if (promptExpanded) refreshExpandedReserve()
+        applyImageReserve(promptExpanded)
+      }
+
+      suppressPositionUntil = 0
+      positionLabel()
+    }
+
     viewBtn?.addEventListener('click', () => setPromptExpanded(true))
     collapseBtn?.addEventListener('click', () => setPromptExpanded(false))
+    showDetailsBtn?.addEventListener('click', () => setPromptHidden(false))
 
     // Heading chrome is stable across the shell → prompt swap (only
     // .sh-lightbox-prompt-content is replaced), so the action listeners are
@@ -998,10 +1058,10 @@ export function createLightboxPromptLabel(deps: {
       })
     })
 
-    // The one 'hide' dismissal: the native image viewer stays open, so the
-    // image should reclaim the caption space immediately.
-    const closeBtn = wrapper.querySelector('.sh-lightbox-prompt-close') as HTMLButtonElement | null
-    closeBtn?.addEventListener('click', () => dismissLabel('hide'))
+    // Hide is reversible: release the caption strip immediately but keep
+    // the prompt data and lifecycle tether alive behind a tiny overlay control.
+    const hideBtn = wrapper.querySelector('.sh-lightbox-prompt-close') as HTMLButtonElement | null
+    hideBtn?.addEventListener('click', () => setPromptHidden(true))
 
     // Spinner lives inside the swappable content region, so it is destroyed
     // explicitly before the swap replaces its DOM (and via cleanup if the
@@ -1033,7 +1093,7 @@ export function createLightboxPromptLabel(deps: {
     if (!resolved || (!resolved.shutter && !resolved.embedded)) {
       // No saved or readable embedded metadata but the viewer is still open:
       // the pill leaves quietly and the image reclaims the strip immediately.
-      dismissLabel('hide')
+      dismissLabel('empty')
       return
     }
     promptSources = resolved
@@ -1073,7 +1133,7 @@ export function createLightboxPromptLabel(deps: {
       copyBtn.disabled = false
     }
     promptExpanded = false
-    applyImageReserve(false)
+    if (!promptHidden) applyImageReserve(false)
     promptEl.classList.remove('sh-swapping')
     labelEl = promptEl
     schedulePosition()

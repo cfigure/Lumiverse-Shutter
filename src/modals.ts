@@ -777,9 +777,21 @@ export function createModals(deps: {
   function openHistoryViewer(
     records: GenerationHistoryRecord[],
     initialImageId: string,
-    closeUnderlyingLightbox?: () => void,
-    closeParentPrompt?: () => void,
+    options: {
+      closeUnderlyingLightbox?: () => void
+      closeParentPrompt?: () => void
+      dismissLabel?: 'Back' | 'Close'
+      replaceImageId?: string | null
+    } = {},
   ): void {
+    const {
+      closeUnderlyingLightbox,
+      closeParentPrompt,
+      dismissLabel = 'Back',
+    } = options
+    const replaceImageId = options.replaceImageId === null
+      ? undefined
+      : options.replaceImageId ?? initialImageId
     const history = [...records].sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
     if (history.length === 0) return
 
@@ -864,8 +876,10 @@ export function createModals(deps: {
     const closeBtn = document.createElement('button')
     closeBtn.type = 'button'
     closeBtn.className = 'sh-prompt-btn sh-prompt-btn-cancel'
-    closeBtn.textContent = 'Back'
-    closeBtn.title = 'Return to the previous viewer'
+    closeBtn.textContent = dismissLabel
+    closeBtn.title = dismissLabel === 'Back'
+      ? 'Return to the previous viewer'
+      : 'Close Generation History'
     closeBtn.addEventListener('click', () => modal.dismiss())
 
     const viewPromptBtn = document.createElement('button')
@@ -918,7 +932,10 @@ export function createModals(deps: {
     replaceBtn.type = 'button'
     replaceBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
     replaceBtn.textContent = 'Replace'
-    replaceBtn.title = 'Replace the image that opened Generation History'
+    const replaceReadyTitle = replaceImageId
+      ? 'Replace the image that opened Generation History'
+      : 'Replace the last Shutter image in its original message response'
+    replaceBtn.title = replaceReadyTitle
 
     const insertBtn = document.createElement('button')
     insertBtn.type = 'button'
@@ -942,7 +959,7 @@ export function createModals(deps: {
         ? 'The original image file has been deleted'
         : selectedAvailability === 'unknown' && previewLoadFailed
           ? 'Shutter could not verify that this image is available'
-          : 'Replace the image that opened Generation History'
+          : replaceReadyTitle
       insertBtn.title = selectedAvailability === 'missing'
         ? 'The original image file has been deleted'
         : selectedAvailability === 'unknown' && previewLoadFailed
@@ -980,9 +997,10 @@ export function createModals(deps: {
         chatId: entry.target.chatId,
         target: entry.target,
         replace,
-        // History was opened from a concrete lightbox image. Replace that
-        // exact tag, not whichever Shutter image happens to be last now.
-        replaceImageId: replace ? initialImageId : undefined,
+        // Image-based entry points replace the exact tag that opened History.
+        // The direct widget entry leaves this unset, preserving the backend's
+        // existing rule of replacing the last Shutter image in the response.
+        replaceImageId: replace ? replaceImageId : undefined,
       })
       if (!result.success || !result.changed) {
         if (modal.root.isConnected) {
@@ -1207,7 +1225,9 @@ export function createModals(deps: {
         onClose: () => modal.dismiss(),
         historyLabel: history.length > 0 ? `View History · ${history.length}` : undefined,
         onViewHistory: history.length > 0
-          ? () => openHistoryViewer(history, tag.imageId, undefined, () => modal.dismiss())
+          ? () => openHistoryViewer(history, tag.imageId, {
+              closeParentPrompt: () => modal.dismiss(),
+            })
           : undefined,
         onUsePrompt: reuseTarget
           ? (view) => {

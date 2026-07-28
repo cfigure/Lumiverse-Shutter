@@ -37,6 +37,12 @@ const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72,
 const DRAG_THRESHOLD_PX = 5
 const DRAG_THRESHOLD_MS = 300
 const LONG_PRESS_MS = 500
+const PERMISSION_LABELS: Record<string, string> = {
+  chat_mutation: 'Chat Mutation',
+  ui_panels: 'UI Panels',
+  interceptor: 'Interceptor',
+  app_manipulation: 'App Manipulation',
+}
 
 // ── Helpers ──
 
@@ -207,7 +213,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (missing.length === 0) return
     ctx.ui.showConfirm({
       title: 'Permissions Required',
-      message: `Shutter needs: ${missing.join(', ')}. Interceptor access removes Shutter Markdown image tags from model prompts. App Manipulation access shows the generation prompt below Shutter images in the native lightbox.`,
+      message: `Shutter needs: ${missing.map(p => PERMISSION_LABELS[p] ?? p).join(', ')}. Interceptor access removes Shutter Markdown image tags from model prompts. App Manipulation access shows prompt and history controls below Shutter images in the native lightbox.`,
       variant: 'info',
       confirmLabel: 'Grant',
       cancelLabel: 'Not Now',

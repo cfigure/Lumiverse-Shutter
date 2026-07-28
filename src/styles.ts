@@ -395,7 +395,7 @@ export const SHUTTER_CSS = `
       flex-shrink: 0;
       justify-content: center;
       margin-left: auto;
-      padding: 2px 8px;
+      padding: 2px 10px;
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);

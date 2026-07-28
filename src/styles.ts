@@ -65,16 +65,18 @@ export const SHUTTER_CSS = `
    overflows the 520px height cap and brings back the scrollbar. */
     .sh-modal-body { padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .sh-replace-row { padding: 2px 0; }
-    /* Generation History deliberately inherits the same body gap and preview
-       sizing as Image Generated. Extra History content must fit around that
-       established preview budget rather than making the preview taller. */
+    /* Keep Generation History metadata to one line so long provider or model
+    names cannot increase the modal height. Full details remain available
+    in Image Prompt. */
     .sh-generation-meta {
       min-width: 0;
       padding: 0 2px 2px;
       color: var(--lumiverse-text-muted, #999);
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
-      overflow-wrap: anywhere;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     /* Image preview — matches ImageGenPanel.module.css */

@@ -387,30 +387,6 @@ export const SHUTTER_CSS = `
       touch-action: pan-y;
       flex: 1 1 auto;
     }
-    .sh-lightbox-prompt-copy {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-      flex-shrink: 0;
-      justify-content: center;
-      margin-left: auto;
-      padding: 2px 10px;
-      background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
-      border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
-      border-radius: var(--lcs-radius-sm, 6px);
-      color: var(--lumiverse-text-muted, #999);
-      font-size: calc(10px * var(--lumiverse-font-scale, 1));
-      font-weight: 600;
-      line-height: 1.4;
-      cursor: pointer;
-    }
-    .sh-lightbox-prompt-copy:hover { color: var(--lumiverse-text, #eee); border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5)); }
-    .sh-lightbox-prompt-copy.sh-copied,
-    .sh-lightbox-prompt-copy.sh-copied:hover {
-      color: var(--lumiverse-success, #4ade80);
-      border-color: var(--lumiverse-success, #4ade80);
-    }
     /* The spinner remains host-rendered; Hide uses Shutter's standard
        compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
@@ -456,20 +432,19 @@ export const SHUTTER_CSS = `
       flex-wrap: nowrap;
       white-space: nowrap;
     }
-    .sh-lightbox-prompt-actions .sh-lightbox-prompt-copy {
-      margin-left: 0;
-    }
+    .sh-lightbox-prompt-copy,
     .sh-lightbox-prompt-history,
     .sh-lightbox-prompt-view,
     .sh-lightbox-prompt-collapse,
     .sh-lightbox-prompt-close {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
       white-space: nowrap;
       flex-shrink: 0;
       margin-left: 0;
-      padding: 2px 10px;
+      padding: 4px 8px;
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);
@@ -479,12 +454,18 @@ export const SHUTTER_CSS = `
       line-height: 1.4;
       cursor: pointer;
     }
+    .sh-lightbox-prompt-copy:hover,
     .sh-lightbox-prompt-history:hover,
     .sh-lightbox-prompt-view:hover,
     .sh-lightbox-prompt-collapse:hover,
     .sh-lightbox-prompt-close:hover {
       color: var(--lumiverse-text, #eee);
       border-color: var(--lumiverse-primary-050, rgba(147,112,219,0.5));
+    }
+    .sh-lightbox-prompt-copy.sh-copied,
+    .sh-lightbox-prompt-copy.sh-copied:hover {
+      color: var(--lumiverse-success, #4ade80);
+      border-color: var(--lumiverse-success, #4ade80);
     }
     .sh-lightbox-prompt.sh-pill {
       width: 100%;
@@ -519,8 +500,6 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
-      padding-block: 4px;
-      padding-inline: 8px;
       font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {

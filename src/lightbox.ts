@@ -523,7 +523,7 @@ export function createLightboxPromptLabel(deps: {
             <button class="sh-lightbox-prompt-view" type="button" title="View prompt" aria-label="View prompt" hidden disabled>Prompt</button>
             <button class="sh-lightbox-prompt-collapse" type="button" title="Collapse prompt" aria-label="Collapse prompt" hidden disabled>Collapse</button>
             <button class="sh-lightbox-prompt-copy" type="button" title="Copy prompt" aria-label="Copy prompt" hidden disabled>Copy</button>
-            <button class="sh-lightbox-prompt-close" type="button" title="Close prompt controls" aria-label="Close prompt controls">Close</button>
+            <button class="sh-lightbox-prompt-close" type="button" title="Hide prompt controls" aria-label="Hide prompt controls">Hide</button>
           </span>
         </div>
         <div class="sh-lightbox-prompt-scroll" hidden>

@@ -298,7 +298,7 @@ export const SHUTTER_CSS = `
       overflow-wrap: anywhere;
     }
     .sh-image-prompt-fields { min-height: 0; overflow: hidden; gap: 14px; }
-    .sh-image-prompt-readonly { box-sizing: border-box; cursor: text; background: rgba(255, 255, 255, 0.025); border-color: transparent; border-radius: 4px; }
+    .sh-image-prompt-readonly { box-sizing: border-box; cursor: text; background: rgba(255, 255, 255, 0.018); border-color: rgba(255, 255, 255, 0.10); border-radius: 10px; }
     .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 120px; }
     .sh-image-prompt-field-negative .sh-image-prompt-readonly { height: 64px; }
     .sh-image-prompt-fields.sh-no-negative .sh-image-prompt-field-positive .sh-image-prompt-readonly { height: 196px; }

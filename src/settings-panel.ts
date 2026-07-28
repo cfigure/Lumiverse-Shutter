@@ -266,7 +266,7 @@ export function createSettingsPanel(deps: {
     const hasAppManipulationPermission = deps.hasPermission('app_manipulation')
     const lightboxPromptRow = makeRow(
       'Show Prompt and History in Lightbox',
-      'Show saved prompt details and generation history for Shutter images opened in the native image viewer. Embedded image metadata is used when saved Shutter data is unavailable.',
+      'Show saved prompt details and generation history for Shutter images opened in the native image viewer.',
     )
     container.appendChild(lightboxPromptRow.row)
     const showPromptInLightbox = ctx.components.mountSwitch(lightboxPromptRow.controlSlot, {

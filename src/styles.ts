@@ -74,9 +74,7 @@ export const SHUTTER_CSS = `
       color: var(--lumiverse-text-muted, #999);
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       line-height: 1.45;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      overflow-wrap: anywhere;
     }
 
     /* Image preview — matches ImageGenPanel.module.css */

@@ -611,6 +611,7 @@ export function setup(ctx: SpindleFrontendContext) {
         { key: 'replace', label: 'Replace' },
         ...(showForce ? [{ key: 'force', label: 'Force Generate' }] : []),
         { key: 'div_vp', label: '', type: 'divider' },
+        ...(settings?.generationHistory ? [{ key: 'insert', label: 'Insert' }] : []),
         { key: 'view_prompt', label: 'View Prompt' },
         { key: 'div1', label: '', type: 'divider' },
         { key: 'delete', label: 'Remove', danger: true },
@@ -621,6 +622,30 @@ export function setup(ctx: SpindleFrontendContext) {
     if (selectedKey === 'append') triggerGenerate()
     else if (selectedKey === 'replace') triggerGenerate(undefined, undefined, false, true)
     else if (selectedKey === 'force') triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace', true)
+    else if (selectedKey === 'insert') {
+      const chatId = ctx.getActiveChat()?.chatId ?? undefined
+      if (!chatId) return
+      const target = await comms.resolveGenerationTarget(chatId, '__last__')
+      const history = target ? await comms.getGenerationHistory(target) : []
+      if (history.length === 0) {
+        ctx.sendToBackend({
+          type: 'show_toast',
+          level: 'info',
+          message: 'No generation history is available for the last message.',
+        })
+        return
+      }
+      const newest = history.reduce((latest, entry) =>
+        entry.createdAt > latest.createdAt
+          || (entry.createdAt === latest.createdAt && entry.imageId.localeCompare(latest.imageId) > 0)
+          ? entry
+          : latest,
+      )
+      modals.openHistoryViewer(history, newest.imageId, {
+        dismissLabel: 'Close',
+        replaceImageId: null,
+      })
+    }
     else if (selectedKey === 'view_prompt') modals.viewLastPrompt()
     else if (selectedKey === 'delete') deleteImage()
     else if (selectedKey === 'delete_all') deleteAllImages()
@@ -776,7 +801,9 @@ export function setup(ctx: SpindleFrontendContext) {
     notifyGenerationSkipped,
     parseErrorMessage,
   })
-  openHistoryFromLightbox = (records, imageId, closeUnderlyingLightbox) => modals.openHistoryViewer(records, imageId, closeUnderlyingLightbox)
+  openHistoryFromLightbox = (records, imageId, closeUnderlyingLightbox) => modals.openHistoryViewer(records, imageId, {
+    closeUnderlyingLightbox,
+  })
 
   // ── Backend messages ──
 

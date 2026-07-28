@@ -1252,7 +1252,7 @@ export function createModals(deps: {
 
     const subtitle = document.createElement('div')
     subtitle.className = 'sh-prompt-subtitle'
-    subtitle.textContent = 'This is the prompt that will be sent to the image generator. Edit it freely \u2014 the parser will be skipped on confirm.'
+    subtitle.textContent = 'Review or edit the prompt below. Generate sends it exactly as written.'
     container.appendChild(subtitle)
 
     // Prompt field — native textarea matching InputPromptModal

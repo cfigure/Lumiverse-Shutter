@@ -1127,7 +1127,7 @@ export function createModals(deps: {
     if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 
-    const modal = ctx.ui.showModal({ title: 'Image Prompt (Read Only)', width: 640, persistent: true }) as ModalHandle
+    const modal = ctx.ui.showModal({ title: 'Image Prompt', width: 640, persistent: true }) as ModalHandle
     activePromptViewerModal = modal
     isolateModalInput(modal)
     setImagePromptOverflow(modal, true)

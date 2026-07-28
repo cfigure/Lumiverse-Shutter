@@ -334,7 +334,7 @@ export function createModals(deps: {
     if (shutterView && embeddedView) {
       sourceSlot.className = 'sh-prompt-source-tabs'
       sourceSlot.setAttribute('role', 'tablist')
-      sourceSlot.setAttribute('aria-label', 'Prompt metadata source')
+      sourceSlot.setAttribute('aria-label', 'Prompt source')
       for (const [source, label, view] of [
         ['shutter', 'Shutter', shutterView],
         ['embedded', 'Embedded', embeddedView],
@@ -713,7 +713,7 @@ export function createModals(deps: {
     const choices = document.createElement('div')
     choices.className = 'sh-prompt-actions'
     choices.appendChild(makeDestBtn('Close', 'Close without inserting', 'sh-prompt-btn-cancel', () => modal.dismiss()))
-    choices.appendChild(makeDestBtn('Rebuild Prompt', 'Re-parse the chat and generate a new prompt', 'sh-prompt-btn-secondary', () => {
+    choices.appendChild(makeDestBtn('Rebuild Prompt', 'Start over and build a new prompt from the chat', 'sh-prompt-btn-secondary', () => {
       modal.dismiss()
       deps.triggerGenerate(target.messageId, target.chatId, isAuto, replaceChecked, false, target, 'rebuild')
     }))
@@ -1154,7 +1154,7 @@ export function createModals(deps: {
     container.className = 'sh-prompt-body sh-image-prompt-loading'
     const subtitle = document.createElement('p')
     subtitle.className = 'sh-prompt-subtitle'
-    subtitle.textContent = 'Reading saved and embedded prompt metadata.'
+    subtitle.textContent = 'Reading prompt details…'
     container.appendChild(subtitle)
 
     const status = document.createElement('div')
@@ -1207,7 +1207,7 @@ export function createModals(deps: {
       const shutterView = record ? promptViewFromRecord(record) : null
       const embeddedView = embedded ? promptViewFromEmbedded(embedded.prompt, embedded.negativePrompt) : null
       if (!shutterView && !embeddedView) {
-        subtitle.textContent = 'No saved or embedded prompt metadata is available for this image.'
+        subtitle.textContent = 'No saved or embedded prompt was found for this image.'
         status.remove()
         return
       }
@@ -1298,7 +1298,7 @@ export function createModals(deps: {
 
     const rerunBtn = document.createElement('button')
     rerunBtn.className = 'sh-prompt-btn sh-prompt-btn-secondary'
-    rerunBtn.textContent = 'Re-run parser'
+    rerunBtn.textContent = 'Rebuild Prompt'
 
     const generateBtn = document.createElement('button')
     generateBtn.className = 'sh-prompt-btn sh-prompt-btn-primary'

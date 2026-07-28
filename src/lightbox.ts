@@ -490,7 +490,7 @@ export function createLightboxPromptLabel(deps: {
     function bodyContentHtml(view: PromptMetadataView, sources: PromptSources): string {
       const selector = sources.shutter && sources.embedded
         ? `<div class="sh-lightbox-prompt-source-row">
-            <div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt metadata source">
+            <div class="sh-prompt-source-tabs" role="tablist" aria-label="Prompt source">
               <button type="button" class="sh-prompt-source-btn${view.source === 'shutter' ? ' sh-active' : ''}" data-source="shutter" role="tab" aria-selected="${view.source === 'shutter'}">Shutter</button>
               <button type="button" class="sh-prompt-source-btn${view.source === 'embedded' ? ' sh-active' : ''}" data-source="embedded" role="tab" aria-selected="${view.source === 'embedded'}">Embedded</button>
             </div>

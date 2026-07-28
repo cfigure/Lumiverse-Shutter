@@ -255,7 +255,7 @@ export const SHUTTER_CSS = `
       justify-content: center;
       flex: 0 0 auto;
       min-width: 0;
-      padding: 2px 8px;
+      padding: 2px 10px;
       border: 1px solid var(--lumiverse-border, rgba(255,255,255,0.08));
       border-radius: var(--lcs-radius-sm, 6px);
       background: var(--lumiverse-fill-subtle, rgba(255,255,255,0.06));

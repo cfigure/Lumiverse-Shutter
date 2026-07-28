@@ -625,7 +625,10 @@ export function setup(ctx: SpindleFrontendContext) {
     else if (selectedKey === 'insert') {
       const chatId = ctx.getActiveChat()?.chatId ?? undefined
       if (!chatId) return
-      const target = await comms.resolveGenerationTarget(chatId, '__last__')
+      const [target, currentTag] = await Promise.all([
+        comms.resolveGenerationTarget(chatId, '__last__'),
+        comms.resolveShutterTag(chatId, '__last__', -1),
+      ])
       const history = target ? await comms.getGenerationHistory(target) : []
       if (history.length === 0) {
         ctx.sendToBackend({
@@ -637,14 +640,22 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       const newest = history.reduce((latest, entry) =>
         entry.createdAt > latest.createdAt
-          || (entry.createdAt === latest.createdAt && entry.imageId.localeCompare(latest.imageId) > 0)
+          || (
+            entry.createdAt === latest.createdAt
+            && entry.imageId.localeCompare(latest.imageId) > 0
+          )
           ? entry
           : latest,
       )
-      modals.openHistoryViewer(history, newest.imageId, {
+      const initialImageId =
+        currentTag && history.some(entry => entry.imageId === currentTag.imageId)
+          ? currentTag.imageId
+          : newest.imageId
+      
+      modals.openHistoryViewer(history, initialImageId, {
         dismissLabel: 'Close',
         replaceImageId: null,
-      })
+      })      
     }
     else if (selectedKey === 'view_prompt') modals.viewLastPrompt()
     else if (selectedKey === 'delete') deleteImage()

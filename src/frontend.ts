@@ -300,7 +300,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       const data = await resp.json()
       const s = data?.value
-      if (!s || typeof s !== 'object') throw new Error('Native ImageGen settings were not returned.')
+      if (!s || typeof s !== 'object') throw new Error('No settings were found.')
 
       cachedNativeSettings = s
       return s
@@ -347,7 +347,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!result.generated) {
       return { skipped: true, reason: result.reason || 'Scene has not changed enough' }
     }
-    if (!result.imageId) throw new Error('Image generated but not persisted')
+    if (!result.imageId) throw new Error('The image was generated but could not be saved.')
 
     const providerId = typeof result.provider === 'string' ? result.provider : ''
     const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise])

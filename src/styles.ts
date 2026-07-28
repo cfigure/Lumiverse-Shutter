@@ -519,6 +519,7 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
+      padding-block: 4px;
       padding-inline: 8px;
       font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
     }

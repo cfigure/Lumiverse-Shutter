@@ -367,8 +367,6 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt-heading {
       font-size: calc(11px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
       color: var(--lumiverse-text-muted, #999);
       padding-bottom: 4px;
       margin-bottom: 4px;
@@ -404,8 +402,6 @@ export const SHUTTER_CSS = `
       color: var(--lumiverse-text-muted, #999);
       font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
       line-height: 1.4;
       cursor: pointer;
     }
@@ -480,8 +476,6 @@ export const SHUTTER_CSS = `
       color: var(--lumiverse-text-muted, #999);
       font-size: calc(10px * var(--lumiverse-font-scale, 1));
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
       line-height: 1.4;
       cursor: pointer;
     }

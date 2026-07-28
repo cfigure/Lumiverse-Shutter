@@ -411,7 +411,7 @@ export const SHUTTER_CSS = `
       color: var(--lumiverse-success, #4ade80);
       border-color: var(--lumiverse-success, #4ade80);
     }
-    /* The spinner remains host-rendered; Close uses Shutter's standard
+    /* The spinner remains host-rendered; Hide uses Shutter's standard
        compact lightbox-button treatment for visual consistency. */
     .sh-lightbox-prompt-spinner-slot { display: inline-flex; align-items: center; }
     .sh-lightbox-prompt-content { padding-bottom: 2px; }
@@ -519,7 +519,7 @@ export const SHUTTER_CSS = `
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-collapse,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-copy,
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-close {
-      padding-inline: 6px;
+      padding-inline: 8px;
       font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
     }
     .sh-lightbox-prompt.sh-pill .sh-lightbox-prompt-scroll {

@@ -14,7 +14,6 @@ import {
   createHistoryRecord,
   historyChatSnapshotPath,
   historyEpochPrefix,
-  isGenerationHistoryRecord,
   isHistoryStateV1,
   parseChatHistorySnapshotV1,
   recordMatchesInput,
@@ -145,113 +144,10 @@ async function writeAndVerifySnapshot(
   }
 }
 
-type PreReleaseHistoryState = {
-  version: 1
-  epoch: number
-}
-
-function isPreReleaseHistoryState(value: unknown): value is PreReleaseHistoryState {
-  const state = value as PreReleaseHistoryState | null
-  return !!state
-    && state.version === 1
-    && Number.isInteger(state.epoch)
-    && state.epoch > 0
-}
-
-async function migratePreReleaseHistoryUnlocked(
-  legacyState: PreReleaseHistoryState,
-  userId?: string,
-): Promise<HistoryStateV1> {
-  const legacyEpoch = legacyState.epoch
-  const recordsByChat = new Map<string, GenerationHistoryRecord[]>()
-  const targetPrefix = `${HISTORY_STORE_PREFIX}/epochs/${legacyEpoch}/targets/`
-  const paths = await spindle.userStorage.list(targetPrefix, userId)
-
-  for (const relativePath of paths) {
-    const stored = await readStoredJson(`${targetPrefix}${relativePath}`, userId)
-    if (stored.status !== 'valid' || !isGenerationHistoryRecord(stored.value)) {
-      spindle.log.warn(`[history] Skipped malformed pre-release record: ${relativePath}`)
-      continue
-    }
-    const record = stored.value
-    if (record.target.historyEpoch !== legacyEpoch) continue
-    const records = recordsByChat.get(record.target.chatId) ?? []
-    const existing = records.find(entry => entry.imageId === record.imageId)
-    if (!existing) records.push(record)
-    else if (!recordMatchesInput(existing, record.target, record)) {
-      spindle.log.warn(`[history] Conflicting pre-release record for image ${record.imageId}; kept the first valid copy.`)
-    }
-    recordsByChat.set(record.target.chatId, records)
-  }
-
-  for (const [chatId, records] of recordsByChat) {
-    records.sort((a, b) => a.createdAt - b.createdAt || a.imageId.localeCompare(b.imageId))
-    const timestamp = Date.now()
-    const snapshot: ChatHistorySnapshotV1 = {
-      schemaVersion: 1,
-      epoch: legacyEpoch,
-      chatId,
-      revision: Math.max(1, records.length),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      records,
-    }
-    await writeAndVerifySnapshot(snapshot, 'a', userId)
-  }
-
-  const state: HistoryStateV1 = { schemaVersion: 1, epoch: legacyEpoch }
-  await writeAndVerifyState(state, userId)
-  if (recordsByChat.size > 0) {
-    spindle.log.info(`[history] Migrated pre-release history into ${recordsByChat.size} compact chat snapshot${recordsByChat.size === 1 ? '' : 's'}.`)
-  }
-  return state
-}
-
-async function inferPreReleaseStateWithoutStateUnlocked(
-  existingFiles: string[],
-  userId?: string,
-): Promise<PreReleaseHistoryState | null> {
-  // The unreleased 1.0.7 build used { version: 1, epoch: 1 } as an in-memory
-  // fallback but did not persist state.json until Clear History was used. A
-  // tester can therefore have valid epoch-1 target records with no state file.
-  // Only recognise that exact legacy file layout; never infer ownership for
-  // compact chat snapshots or unknown files.
-  const legacyPath = /^epochs\/(\d+)\/(targets|records)\/.+\.json$/
-  const epochs = new Set<number>()
-  const targetPaths: Array<{ epoch: number; relativePath: string }> = []
-
-  for (const listedPath of existingFiles) {
-    const relativePath = listedPath.replace(/^\/+/, '')
-    const match = legacyPath.exec(relativePath)
-    if (!match) return null
-    const epoch = Number.parseInt(match[1] ?? '', 10)
-    if (!Number.isInteger(epoch) || epoch <= 0) return null
-    epochs.add(epoch)
-    if (match[2] === 'targets') targetPaths.push({ epoch, relativePath })
-  }
-
-  if (epochs.size !== 1 || targetPaths.length === 0) return null
-  const [epoch] = epochs
-  if (!epoch) return null
-
-  let validRecordCount = 0
-  for (const targetPath of targetPaths) {
-    const stored = await readStoredJson(`${HISTORY_STORE_PREFIX}/${targetPath.relativePath}`, userId)
-    if (stored.status !== 'valid' || !isGenerationHistoryRecord(stored.value)) continue
-    if (stored.value.target.historyEpoch !== epoch) continue
-    validRecordCount++
-  }
-
-  return validRecordCount > 0 ? { version: 1, epoch } : null
-}
-
 async function loadHistoryStateUnlocked(userId?: string): Promise<HistoryStateV1> {
   const stored = await readStoredJson(HISTORY_STATE_PATH, userId)
   if (stored.status === 'valid') {
     if (isHistoryStateV1(stored.value)) return stored.value
-    if (isPreReleaseHistoryState(stored.value)) {
-      return migratePreReleaseHistoryUnlocked(stored.value, userId)
-    }
     throw new Error('Generation History state has an unsupported or malformed schema.')
   }
   if (stored.status === 'invalid') {
@@ -260,13 +156,6 @@ async function loadHistoryStateUnlocked(userId?: string): Promise<HistoryStateV1
 
   const existingFiles = await spindle.userStorage.list(HISTORY_STORE_PREFIX, userId)
   if (existingFiles.length > 0) {
-    const inferredLegacyState = await inferPreReleaseStateWithoutStateUnlocked(existingFiles, userId)
-    if (inferredLegacyState) {
-      spindle.log.info(
-        `[history] Found pre-release epoch ${inferredLegacyState.epoch} history without state.json; importing it into the public v1 snapshot store.`,
-      )
-      return migratePreReleaseHistoryUnlocked(inferredLegacyState, userId)
-    }
     throw new Error('Generation History files exist without a readable state file and were not overwritten.')
   }
 
@@ -389,7 +278,7 @@ async function highestStoredHistoryEpochUnlocked(userId?: string): Promise<numbe
 
   const state = await readStoredJson(HISTORY_STATE_PATH, userId)
   if (state.status === 'valid') {
-    if (isHistoryStateV1(state.value) || isPreReleaseHistoryState(state.value)) {
+    if (isHistoryStateV1(state.value)) {
       highest = Math.max(highest, state.value.epoch)
     }
   }
@@ -406,7 +295,7 @@ async function highestStoredHistoryEpochUnlocked(userId?: string): Promise<numbe
 async function clearGenerationHistory(userId?: string): Promise<void> {
   await withHistoryQueue(userId, async () => {
     // Clear is an explicit destructive recovery operation. It must still work
-    // when either the current or pre-release state file is malformed.
+    // when the current state file is malformed.
     const highestEpoch = await highestStoredHistoryEpochUnlocked(userId)
     const next: HistoryStateV1 = { schemaVersion: 1, epoch: Math.max(1, highestEpoch + 1) }
 

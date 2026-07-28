@@ -55,7 +55,7 @@ export function createLightboxPromptLabel(deps: {
   //
   // Shows the generation prompt below Shutter images opened in the native
   // image lightbox. Gated on the 'app_manipulation' permission and the
-  // 'Show Prompt in Lightbox' setting, degrading silently without either
+  // 'Show Prompt and History in Lightbox' setting, degrading silently without either
   // (same pattern as the interceptor feature).
   //
   // The native ImageLightbox uses build-hashed class names and no stable

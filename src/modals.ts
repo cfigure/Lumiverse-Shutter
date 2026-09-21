@@ -8,7 +8,7 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { Settings } from './settings'
 import type { Comms } from './comms'
-import type { GenerationResult, GenerationSkipped } from './frontend'
+import type { GenerationResult, GenerationSkipped } from './native-image-gen'
 import { resolveEmbeddedPromptForImage } from './metadata'
 import { COPY_CHECK_SVG } from './styles'
 import {
@@ -34,6 +34,7 @@ export function createModals(deps: {
   callPreviewPrompt: (chatId: string) => Promise<{ prompt: string; negativePrompt: string }>
   notifyGenerationSkipped: (reason: string) => void
   parseErrorMessage: (raw: string) => string
+  getActiveChatId?: () => string | undefined
 }) {
   const { ctx, comms } = deps
 
@@ -1140,7 +1141,7 @@ export function createModals(deps: {
   let activePromptViewerModal: ModalHandle | null = null
 
   function viewLastPrompt(): void {
-    const chatId = ctx.getActiveChat()?.chatId ?? undefined
+    const chatId = deps.getActiveChatId?.() ?? ctx.getActiveChat()?.chatId ?? undefined
     if (!chatId || promptViewerOpen) return
     promptViewerOpen = true
 

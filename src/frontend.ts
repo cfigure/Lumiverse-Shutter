@@ -1,4 +1,4 @@
-import type { SpindleFrontendContext, SpindleFloatWidgetHandle } from 'lumiverse-spindle-types'
+import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import { getIconSet } from './icons'
 import { clampShutterImageWidth, type Settings } from './settings'
 import { SHUTTER_CSS } from './styles'
@@ -7,62 +7,22 @@ import { createLightboxPromptLabel } from './lightbox'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
 import type { GenerationHistoryRecord, GenerationOrigin, GenerationTarget } from './history'
+import { mountShutterFloatWidget, type ShutterFloatWidget } from './float-widget'
+import {
+  createNativeImageGen,
+  parseErrorMessage,
+  type GenerationResult,
+} from './native-image-gen'
 
 // ── Types ──
 
-export type GenerationResult = {
-  imageId: string
-  imageUrl: string
-  handledByNative: boolean
-  prompt: string
-  negativePrompt: string
-  promptMode: string
-  provider?: string
-  model?: string
-}
-
-// Native ImageGen returns { generated: false, reason } when the scene hasn't
-// changed enough (scene prompt mode only, and only when the native
-// forceGeneration setting — "Ignore Scene Change Detection" in the panel —
-// is off). That's expected behaviour, not a failure, so it's modelled as a
-// distinct outcome rather than a thrown error.
-export type GenerationSkipped = {
-  skipped: true
-  reason: string
-}
-
 // ── Constants ──
 
-const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72, xlarge: 96 }
-const DRAG_THRESHOLD_PX = 5
-const DRAG_THRESHOLD_MS = 300
-const LONG_PRESS_MS = 500
 const PERMISSION_LABELS: Record<string, string> = {
   chat_mutation: 'Chat Mutation',
   ui_panels: 'UI Panels',
   interceptor: 'Interceptor',
   app_manipulation: 'App Manipulation',
-}
-
-// ── Helpers ──
-
-function parseErrorMessage(raw: string): string {
-  try {
-    const parsed = JSON.parse(raw)
-    const msg = parsed.message || parsed.error?.message || (typeof parsed.error === 'string' ? parsed.error : null)
-    if (msg) return msg
-  } catch { /* not full JSON — try substring */ }
-
-  try {
-    const i = raw.indexOf('{')
-    if (i >= 0) {
-      const parsed = JSON.parse(raw.slice(i))
-      const msg = parsed.message || parsed.error?.message || (typeof parsed.error === 'string' ? parsed.error : null)
-      if (msg) return msg
-    }
-  } catch { /* not JSON at all */ }
-
-  return raw
 }
 
 // ── Setup ──
@@ -72,7 +32,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let settings: Settings | null = null
   let generating = false
   const comms = createComms(ctx)
-  let floatWidget: SpindleFloatWidgetHandle | null = null
+  let floatWidget: ShutterFloatWidget | null = null
   let inputAction: any = null
   let removeShutterImageLayoutStyle: (() => void) | null = null
 
@@ -159,11 +119,9 @@ export function setup(ctx: SpindleFrontendContext) {
 
     if (next.showFloatWidget && !prev?.showFloatWidget) setupFloatWidget()
     else if (!next.showFloatWidget && prev?.showFloatWidget) destroyFloatWidget()
-    else if (next.showFloatWidget && prev && next.widgetSize !== prev.widgetSize) resizeFloatWidget()
+    else if (next.showFloatWidget && prev) floatWidget?.syncAppearance(next)
 
-    if (next.showFloatWidget && prev && next.widgetStyle !== prev.widgetStyle) updateFloatIcon()
     if (!prev || next.iconTheme !== prev.iconTheme) {
-      if (next.showFloatWidget) updateFloatIcon()
       updateInputActionIcon()
     }
     if (
@@ -251,148 +209,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Native ImageGen ──
 
-  let cachedNativeSettings: Record<string, any> | null = null
-  let cachedImageProviderLabels: Map<string, string> | null = null
-
-  type ImageGenerationSource = {
-    providerId: string
-    model: string
-  }
-
-  async function fetchJsonBestEffort(url: string, timeoutMs = 2000): Promise<any | null> {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
-    try {
-      const response = await fetch(url, { signal: controller.signal })
-      if (!response.ok) return null
-      return await response.json()
-    } catch {
-      return null
-    } finally {
-      clearTimeout(timeout)
-    }
-  }
-
-  async function getImageProviderLabels(): Promise<Map<string, string>> {
-    if (cachedImageProviderLabels) return cachedImageProviderLabels
-    const data = await fetchJsonBestEffort('/api/v1/image-gen-connections/providers')
-    const labels = new Map<string, string>()
-    if (Array.isArray(data?.providers)) {
-      for (const provider of data.providers) {
-        if (typeof provider?.id === 'string' && typeof provider?.name === 'string') {
-          labels.set(provider.id, provider.name)
-        }
-      }
-    }
-    if (labels.size > 0) cachedImageProviderLabels = labels
-    return labels
-  }
-
-  async function resolveImageGenerationSource(connectionId: unknown): Promise<ImageGenerationSource | null> {
-    if (typeof connectionId !== 'string' || !connectionId) return null
-    const connection = await fetchJsonBestEffort(`/api/v1/image-gen-connections/${encodeURIComponent(connectionId)}`)
-    if (!connection || typeof connection.provider !== 'string') return null
-    return {
-      providerId: connection.provider,
-      model: typeof connection.model === 'string' ? connection.model : '',
-    }
-  }
-
-// Raw fetch is deliberate; see the note above callImageGen below.
-  async function fetchNativeSettings(): Promise<Record<string, any>> {
-    try {
-      const resp = await fetch('/api/v1/settings/imageGeneration')
-      if (!resp.ok) throw new Error(await resp.text())
-
-      const data = await resp.json()
-      const s = data?.value
-      if (!s || typeof s !== 'object') throw new Error('No settings were found.')
-
-      cachedNativeSettings = s
-      return s
-    } catch (err: any) {
-      if (cachedNativeSettings !== null) return cachedNativeSettings
-      const details = err?.message ? ` ${parseErrorMessage(err.message)}` : ''
-      throw new Error(`Native ImageGen settings could not be loaded. Make sure Lumiverse ImageGen is available and configured.${details}`)
-    }
-  }
-
-  // Deliberate raw fetch, and it must stay frontend-side: these are the
-  // native scene-pipeline routes, which have no Spindle API equivalent
-  // (spindle.imageGen is the connection-profile API, a different pipeline),
-  // and they authenticate via the user's browser session, which the backend
-  // subprocess does not have.
-  async function callImageGen(
-    chatId: string,
-    overrides?: Record<string, any>,
-    target?: GenerationTarget,
-  ): Promise<GenerationResult | GenerationSkipped> {
-    const native = await fetchNativeSettings()
-    const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
-    const providerLabelsPromise = getImageProviderLabels()
-    const body: Record<string, any> = {
-      ...native,
-      ...overrides,
-      chatId,
-    }
-
-    // Pin native attach-to-message mode to the same response that owns the
-    // Shutter history. This prevents a new trailing message from retargeting
-    // an in-flight generation.
-    if (body.outputTarget === 'attach_to_message' && target) {
-      body.attachToMessageId = target.messageId
-    }
-
-    const resp = await fetch('/api/v1/image-gen/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) throw new Error(await resp.text())
-    const result = await resp.json()
-    if (!result.generated) {
-      return { skipped: true, reason: result.reason || 'Scene has not changed enough' }
-    }
-    if (!result.imageId) throw new Error('The image was generated but could not be saved.')
-
-    const providerId = typeof result.provider === 'string' ? result.provider : ''
-    const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise])
-    const provider = providerId ? (providerLabels.get(providerId) || '') : ''
-    const model = source && source.providerId === providerId ? source.model : ''
-
-    return {
-      imageId: result.imageId,
-      imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
-      handledByNative: !!result.message,
-      prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
-      negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
-      promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
-      provider: provider || undefined,
-      model: model || undefined,
-    }
-  }
-
-  async function callPreviewPrompt(chatId: string): Promise<{ prompt: string; negativePrompt: string }> {
-    const native = await fetchNativeSettings()
-    const resp = await fetch('/api/v1/image-gen/preview-prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chatId,
-        promptMode: native.promptMode,
-        prompt: native.customPrompt,
-        negativePrompt: native.customNegativePrompt,
-        promptPresetId: native.activePromptPresetId,
-        promptGenerationTimeoutSeconds: native.promptGenerationTimeoutSeconds,
-      }),
-    })
-    if (!resp.ok) throw new Error(await resp.text())
-    const result = await resp.json()
-    return {
-      prompt: result.prompt || '',
-      negativePrompt: result.negativePrompt || '',
-    }
-  }
+  const { fetchNativeSettings, callImageGen, callPreviewPrompt } = createNativeImageGen()
 
   // ── Lightbox prompt label (1.0.6) ── moved whole to lightbox.ts
 
@@ -529,12 +346,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function updateFloatBtnState() {
-    if (!floatWidget) return
-    const btn = floatWidget.root.querySelector('.sh-float-btn') as HTMLButtonElement | null
-    if (btn) {
-      btn.disabled = generating
-      btn.classList.toggle('sh-generating', generating)
-    }
+    floatWidget?.setGenerating(generating)
   }
 
   // ── Chat visibility: CHAT_SWITCHED event ──
@@ -670,76 +482,15 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // ── Float widget ──
 
-   function setupFloatWidget() {
+  function setupFloatWidget() {
     if (floatWidget) return
     if (!settings) return
-    const size = WIDGET_SIZES[settings.widgetSize] || 44
-    floatWidget = ctx.ui.createFloatWidget({
-      width: size, height: size,
-      initialPosition: { x: 60, y: window.innerHeight - 140 },
-      snapToEdge: true, tooltip: 'Shutter', chromeless: true,
+    floatWidget = mountShutterFloatWidget({
+      ctx,
+      settings,
+      onGenerate: () => triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace'),
+      onMenu: showWidgetMenu,
     })
-
-    const btn = document.createElement('button')
-    btn.className = 'sh-float-btn'
-    const icon = getIconSet(settings.iconTheme)
-    btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
-
-    let pointerStart: { x: number; y: number; time: number } | null = null
-    let longPressTimer: ReturnType<typeof setTimeout> | null = null
-    let longPressFired = false
-
-    btn.addEventListener('pointerdown', (e) => {
-      // Primary button / touch only. Right-click is handled exclusively by
-      // the contextmenu listener, so it must not arm the tap or long-press
-      // tracker (misc: right-click was triggering a generation AND the menu).
-      if (e.button !== 0) return
-      pointerStart = { x: e.clientX, y: e.clientY, time: Date.now() }
-      longPressFired = false
-      longPressTimer = setTimeout(() => {
-        longPressFired = true
-        longPressTimer = null
-        navigator.vibrate?.(50)
-        showWidgetMenu(e.clientX, e.clientY)
-      }, LONG_PRESS_MS)
-    })
-
-    btn.addEventListener('pointermove', (e) => {
-      if (!pointerStart || !longPressTimer) return
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
-      if (dx > DRAG_THRESHOLD_PX || dy > DRAG_THRESHOLD_PX) {
-        clearTimeout(longPressTimer)
-        longPressTimer = null
-      }
-    })
-
-    btn.addEventListener('pointerup', (e) => {
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
-      if (e.button !== 0) { pointerStart = null; return }
-      if (!pointerStart || longPressFired) { pointerStart = null; return }
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
-      const dt = Date.now() - pointerStart.time
-      pointerStart = null
-
-      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
-        triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace')
-      }
-    })
-
-    btn.addEventListener('pointercancel', () => {
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
-      pointerStart = null
-    })
-
-    btn.addEventListener('contextmenu', (e) => {
-      e.preventDefault()
-      showWidgetMenu(e.clientX, e.clientY)
-    })
-
-    floatWidget.root.appendChild(btn)
-
     const active = ctx.getActiveChat()
     floatWidget.setVisible(!!active.chatId)
   }
@@ -748,26 +499,6 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!floatWidget) return
     floatWidget.destroy()
     floatWidget = null
-  }
-
-  function resizeFloatWidget() {
-    if (!floatWidget) return
-    if (!settings) return
-    const size = WIDGET_SIZES[settings.widgetSize] || 44
-    floatWidget.setSize(size, size)
-  }
-
-  function updateFloatIcon() {
-    if (!floatWidget) return
-    if (!settings) return
-    const svg = floatWidget.root.querySelector('svg')
-    if (svg) {
-      const btn = svg.parentElement
-      if (btn) {
-        const icon = getIconSet(settings.iconTheme)
-        btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
-      }
-    }
   }
 
   // ── Input bar action ──

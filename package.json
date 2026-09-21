@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts src/widget.ts --outdir dist --target browser",
+    "build": "bun build src/backend.ts --outdir dist --target bun && bun build src/frontend.ts --outdir dist --target browser",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -8,8 +8,9 @@
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 import type { Settings } from './settings'
 import type { Comms } from './comms'
-import type { GenerationResult, GenerationSkipped } from './frontend'
+import type { GenerationResult, GenerationSkipped, PromptPreview } from './frontend'
 import { resolveEmbeddedPromptForImage } from './metadata'
+import { shouldApplyResolvedNegative } from './negative-prompt'
 import { COPY_CHECK_SVG } from './styles'
 import {
   formatPromptMetadataForClipboard,
@@ -31,7 +32,7 @@ export function createModals(deps: {
   handleGenerationResult: (result: GenerationResult, target: GenerationTarget, isAuto: boolean, replace?: boolean, origin?: GenerationOrigin) => Promise<void>
   setGeneratingState: (active: boolean) => void
   callImageGen: (chatId: string, overrides?: Record<string, any>, target?: GenerationTarget) => Promise<GenerationResult | GenerationSkipped>
-  callPreviewPrompt: (chatId: string) => Promise<{ prompt: string; negativePrompt: string }>
+  callPreviewPrompt: (chatId: string) => Promise<PromptPreview>
   notifyGenerationSkipped: (reason: string) => void
   parseErrorMessage: (raw: string) => string
 }) {
@@ -1235,7 +1236,7 @@ export function createModals(deps: {
     })()
   }
 
-  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, target: GenerationTarget, isAuto = false, replace = false, origin: GenerationOrigin = 'preview') {
+  function openPromptPreviewModal(initialPrompt: string, initialNegative: string, target: GenerationTarget, isAuto = false, replace = false, origin: GenerationOrigin = 'preview', resolvedNegativePrompt?: Promise<string>) {
     if (promptPreviewOpen) return
     promptPreviewOpen = true
     const modal = ctx.ui.showModal({ title: 'Preview & Edit Image Prompt', width: 640, persistent: true })
@@ -1243,7 +1244,8 @@ export function createModals(deps: {
     // Reset the gate on every dismissal path — Cancel, Generate, the header
     // close button, and Escape — so a dismissed preview can never wedge
     // future generations.
-    modal.onDismiss(() => { promptPreviewOpen = false })
+    let dismissed = false
+    modal.onDismiss(() => { promptPreviewOpen = false; dismissed = true })
     function closePromptModal() {
       modal.dismiss()
     }
@@ -1252,7 +1254,7 @@ export function createModals(deps: {
 
     const subtitle = document.createElement('div')
     subtitle.className = 'sh-prompt-subtitle'
-    subtitle.textContent = 'Review or edit the prompt below. Generate sends it exactly as written.'
+    subtitle.textContent = 'Review or edit the prompt below before generating.'
     container.appendChild(subtitle)
 
     // Prompt field — native textarea matching InputPromptModal
@@ -1278,7 +1280,14 @@ export function createModals(deps: {
     const negTextarea = document.createElement('textarea')
     negTextarea.className = 'sh-prompt-textarea sh-prompt-textarea-short'
     negTextarea.value = initialNegative
-    negTextarea.placeholder = 'Optional negative prompt'
+    negTextarea.placeholder = 'Leave blank to use a default negative prompt, if available.'
+    let negativeEdited = false
+    negTextarea.addEventListener('input', () => { negativeEdited = true })
+    void resolvedNegativePrompt?.then(resolved => {
+      if (shouldApplyResolvedNegative(negTextarea.value, resolved, negativeEdited, dismissed)) {
+        negTextarea.value = resolved
+      }
+    })
     negField.appendChild(negLabel)
     negField.appendChild(negTextarea)
     container.appendChild(negField)
@@ -1324,6 +1333,7 @@ export function createModals(deps: {
         isAuto,
         replace,
         origin,
+        result.resolvedNegativePrompt,
       )
     } catch (err: any) {
       deps.setGeneratingState(false)

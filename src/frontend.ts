@@ -4,7 +4,6 @@ import { clampShutterImageWidth, type Settings } from './settings'
 import { SHUTTER_CSS } from './styles'
 import { createComms } from './comms'
 import { createLightboxPromptLabel } from './lightbox'
-import { resolveEmbeddedPromptForImage } from './metadata'
 import { resolvePreviewPrompt } from './negative-prompt'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
@@ -31,6 +30,12 @@ export type GenerationResult = {
 export type GenerationSkipped = {
   skipped: true
   reason: string
+}
+
+export type PromptPreview = {
+  prompt: string
+  negativePrompt: string
+  resolvedNegativePrompt: Promise<string>
 }
 
 // ── Constants ──
@@ -367,18 +372,13 @@ export function setup(ctx: SpindleFrontendContext) {
     const model = source && source.providerId === providerId ? source.model : ''
     const imageUrl = result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`
     const returnedNegative = typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : '')
-    // Some providers add defaults after Lumiverse resolves the prompt. The
-    // original PNG may carry the actual request's negative prompt.
-    const embedded = returnedNegative ? null : await resolveEmbeddedPromptForImage(
-      { imageId: result.imageId, path: `/api/v1/image-gen/results/${result.imageId}` }, imageUrl,
-    )
 
     return {
       imageId: result.imageId,
       imageUrl,
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
-      negativePrompt: returnedNegative || embedded?.negativePrompt
+      negativePrompt: returnedNegative
         || (source?.providerId === providerId ? source.defaultNegativePrompt : ''),
       promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
       provider: provider || undefined,
@@ -386,7 +386,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  async function callPreviewPrompt(chatId: string): Promise<{ prompt: string; negativePrompt: string }> {
+  async function callPreviewPrompt(chatId: string): Promise<PromptPreview> {
     const native = await fetchNativeSettings()
     const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
     const resp = await fetch('/api/v1/image-gen/preview-prompt', {
@@ -403,8 +403,12 @@ export function setup(ctx: SpindleFrontendContext) {
     })
     if (!resp.ok) throw new Error(await resp.text())
     const result = await resp.json()
-    const source = await sourcePromise
-    return resolvePreviewPrompt(result, source)
+    return {
+      ...resolvePreviewPrompt(result, null),
+      // The connection lookup is best effort. It must not delay the native
+      // parser result or overwrite edits made while the modal is open.
+      resolvedNegativePrompt: sourcePromise.then(source => resolvePreviewPrompt(result, source).negativePrompt),
+    }
   }
 
   // ── Lightbox prompt label (1.0.6) ── moved whole to lightbox.ts
@@ -520,7 +524,7 @@ export function setup(ctx: SpindleFrontendContext) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin)
+          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin, preview.resolvedNegativePrompt)
         } catch (err: any) {
           setGeneratingState(false)
           if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))

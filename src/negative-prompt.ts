@@ -11,3 +11,12 @@ export function resolvePreviewPrompt(
     negativePrompt: parsed || connectionDefault,
   }
 }
+
+export function shouldApplyResolvedNegative(
+  current: string,
+  resolved: string,
+  edited: boolean,
+  dismissed: boolean,
+): boolean {
+  return !dismissed && !edited && !current && !!resolved
+}

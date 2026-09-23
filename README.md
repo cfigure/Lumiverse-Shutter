@@ -124,7 +124,7 @@ These settings apply only when Shutter handles image placement.
 
 ## Compatibility
 
-Shutter 1.1.0 requires Lumiverse 1.1.0 or newer.
+Shutter 1.1.1 requires Lumiverse 1.1.0 or newer.
 
 When upgrading:
 

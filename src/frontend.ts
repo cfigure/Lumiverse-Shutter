@@ -5,6 +5,7 @@ import { SHUTTER_CSS } from './styles'
 import { createComms } from './comms'
 import { createLightboxPromptLabel } from './lightbox'
 import { resolveEmbeddedPromptForImage } from './metadata'
+import { resolvePreviewPrompt } from './negative-prompt'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
 import type { GenerationHistoryRecord, GenerationOrigin, GenerationTarget } from './history'
@@ -378,7 +379,7 @@ export function setup(ctx: SpindleFrontendContext) {
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
       negativePrompt: returnedNegative || embedded?.negativePrompt
-        || (typeof overrides?.parameters?.negativePrompt === 'string' ? overrides.parameters.negativePrompt : source?.defaultNegativePrompt || ''),
+        || (source?.providerId === providerId ? source.defaultNegativePrompt : ''),
       promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
       provider: provider || undefined,
       model: model || undefined,
@@ -387,6 +388,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   async function callPreviewPrompt(chatId: string): Promise<{ prompt: string; negativePrompt: string }> {
     const native = await fetchNativeSettings()
+    const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
     const resp = await fetch('/api/v1/image-gen/preview-prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -401,10 +403,8 @@ export function setup(ctx: SpindleFrontendContext) {
     })
     if (!resp.ok) throw new Error(await resp.text())
     const result = await resp.json()
-    return {
-      prompt: result.prompt || '',
-      negativePrompt: result.negativePrompt || '',
-    }
+    const source = await sourcePromise
+    return resolvePreviewPrompt(result, source)
   }
 
   // ── Lightbox prompt label (1.0.6) ── moved whole to lightbox.ts
@@ -698,7 +698,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const icon = getIconSet(settings.iconTheme)
     btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
 
-    let pointerStart: { x: number; y: number; time: number } | null = null
+    let pointerStart: { id: number; x: number; y: number; time: number } | null = null
     let longPressTimer: ReturnType<typeof setTimeout> | null = null
     let longPressFired = false
 
@@ -706,8 +706,8 @@ export function setup(ctx: SpindleFrontendContext) {
       // Primary button / touch only. Right-click is handled exclusively by
       // the contextmenu listener, so it must not arm the tap or long-press
       // tracker (misc: right-click was triggering a generation AND the menu).
-      if (e.button !== 0) return
-      pointerStart = { x: e.clientX, y: e.clientY, time: Date.now() }
+      if (e.button !== 0 || !e.isPrimary) return
+      pointerStart = { id: e.pointerId, x: e.clientX, y: e.clientY, time: Date.now() }
       longPressFired = false
       longPressTimer = setTimeout(() => {
         longPressFired = true
@@ -720,35 +720,43 @@ export function setup(ctx: SpindleFrontendContext) {
     // The host captures the pointer on drag; subsequent moves can bypass the
     // button. Observe them on window so dragging cannot open our long-press menu.
     const cancelLongPressOnDrag = (e: PointerEvent) => {
-      if (!pointerStart || !longPressTimer) return
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
-      if (dx > DRAG_THRESHOLD_PX || dy > DRAG_THRESHOLD_PX) {
+      if (!pointerStart || e.pointerId !== pointerStart.id || !longPressTimer) return
+      if (Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y) >= DRAG_THRESHOLD_PX) {
         clearTimeout(longPressTimer)
         longPressTimer = null
       }
     }
+    const clearCapturedPointer = (e: PointerEvent) => {
+      if (!pointerStart || e.pointerId !== pointerStart.id) return
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+      pointerStart = null
+    }
     window.addEventListener('pointermove', cancelLongPressOnDrag)
+    window.addEventListener('pointerup', clearCapturedPointer)
+    window.addEventListener('pointercancel', clearCapturedPointer)
     cleanupWidgetDrag = () => {
       window.removeEventListener('pointermove', cancelLongPressOnDrag)
+      window.removeEventListener('pointerup', clearCapturedPointer)
+      window.removeEventListener('pointercancel', clearCapturedPointer)
       if (longPressTimer) clearTimeout(longPressTimer)
     }
 
     btn.addEventListener('pointerup', (e) => {
+      if (pointerStart && e.pointerId !== pointerStart.id) return
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
       if (e.button !== 0) { pointerStart = null; return }
       if (!pointerStart || longPressFired) { pointerStart = null; return }
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
+      const distance = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y)
       const dt = Date.now() - pointerStart.time
       pointerStart = null
 
-      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
+      if (distance < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
         triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace')
       }
     })
 
-    btn.addEventListener('pointercancel', () => {
+    btn.addEventListener('pointercancel', (e) => {
+      if (pointerStart && e.pointerId !== pointerStart.id) return
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
       pointerStart = null
     })

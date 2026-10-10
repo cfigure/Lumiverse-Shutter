@@ -5,7 +5,7 @@ export function resolvePreviewPrompt(
   source: { providerId: string; defaultNegativePrompt: string } | null,
 ): { prompt: string; negativePrompt: string } {
   const parsed = typeof result.negativePrompt === 'string' ? result.negativePrompt : ''
-  const connectionDefault = source?.providerId === result.provider ? source.defaultNegativePrompt : ''
+  const connectionDefault = source && source.providerId === result.provider ? source.defaultNegativePrompt : ''
   return {
     prompt: typeof result.prompt === 'string' ? result.prompt : '',
     negativePrompt: parsed || connectionDefault,

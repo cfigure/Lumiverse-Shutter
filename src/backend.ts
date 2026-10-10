@@ -1,4 +1,6 @@
-declare const spindle: import('lumiverse-spindle-types').SpindleAPI
+import type { InterceptorDisposer, LlmMessageDTO as LlmMessage, SpindleAPI } from 'lumiverse-spindle-types'
+
+declare const spindle: SpindleAPI
 
 import { DEFAULT_SETTINGS, validateSettings, type Settings } from './settings'
 import {
@@ -41,9 +43,6 @@ type FrontendMessage =
   | { type: 'show_toast'; level: 'info' | 'success' | 'warning' | 'error'; message: string }
   | { type: 'resolve_shutter_tag'; requestId: string; chatId: string; messageId: string; index: number }
 
-// Current settings used by backend features that run outside a frontend action.
-let liveSettings: Settings = { ...DEFAULT_SETTINGS }
-
 // ── Storage ──
 
 async function loadSettings(userId?: string): Promise<Settings> {
@@ -57,18 +56,6 @@ async function saveSettings(patch: Partial<Settings>, userId?: string): Promise<
   await spindle.userStorage.setJson('settings.json', merged, { indent: 2, userId })
   return merged
 }
-
-void loadSettings()
-  .then(settings => {
-    liveSettings = settings
-  })
-  .catch(error => {
-    spindle.log.warn(
-      `[settings] Failed to load saved settings; using defaults: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    )
-  })
 
 // ── Durable generation history ──
 
@@ -355,8 +342,6 @@ function stripAllShutterImages(content: string): { content: string; count: numbe
 
 // ── Image-tag context filtering (interceptor) ──
 
-type LlmMessage = import('lumiverse-spindle-types').LlmMessageDTO
-
 function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
   const { content } = message
   if (typeof content === 'string') {
@@ -364,7 +349,7 @@ function stripShutterFromLlmMessage(message: LlmMessage): LlmMessage {
   }
   return {
     ...message,
-    content: content.map((part: any) =>
+    content: content.map(part =>
       part.type === 'text'
         ? { ...part, text: part.text.replace(SHUTTER_IMAGE_GLOBAL_RE, '') }
         : part,
@@ -447,14 +432,12 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
     switch (payload.type) {
       case 'request_settings': {
         const settings = await loadSettings(userId)
-        liveSettings = settings
         spindle.sendToFrontend({ type: 'settings', settings }, userId)
         break
       }
 
       case 'update_settings': {
         const settings = await saveSettings(payload.settings, userId)
-        liveSettings = settings
         spindle.sendToFrontend({ type: 'settings', settings }, userId)
         break
       }
@@ -709,17 +692,23 @@ spindle.onFrontendMessage(async (raw: unknown, userId: string) => {
 
 // ── Image-tag context interceptor ──
 
-let imageTagInterceptorRegistered = false
+let disposeImageTagInterceptor: InterceptorDisposer | null = null
 
 function ensureImageTagInterceptor(): void {
-  if (imageTagInterceptorRegistered || !spindle.permissions.has('interceptor')) return
+  if (disposeImageTagInterceptor || !spindle.permissions.has('interceptor')) return
 
-  spindle.registerInterceptor(async (messages: LlmMessage[]) => {
-    if (!liveSettings.removeImageTagsFromContext) return messages
+  const dispose = spindle.registerInterceptor(async (messages: LlmMessage[], context) => {
+    if (disposeImageTagInterceptor !== dispose || !spindle.permissions.has('interceptor')) return messages
+    const settings = await loadSettings(context.userId)
+    // Permission can change while the invoking user's settings are being read.
+    if (disposeImageTagInterceptor !== dispose
+      || !spindle.permissions.has('interceptor')
+      || !settings.removeImageTagsFromContext
+    ) return messages
     return messages.map(stripShutterFromLlmMessage)
   })
 
-  imageTagInterceptorRegistered = true
+  disposeImageTagInterceptor = dispose
   spindle.log.info('[context-tags] Image-tag interceptor registered.')
 }
 
@@ -730,14 +719,16 @@ spindle.permissions.onChanged(({ permission, granted }: { permission: string; gr
   if (granted) {
     ensureImageTagInterceptor()
   } else {
-    imageTagInterceptorRegistered = false
+    disposeImageTagInterceptor?.()
+    disposeImageTagInterceptor = null
     spindle.log.warn('[context-tags] "interceptor" permission revoked; Shutter image tags will remain in context.')
   }
 })
 
 spindle.permissions.onDenied(({ permission, operation }: { permission: string; operation: string }) => {
   if (permission !== 'interceptor' || operation !== 'registerInterceptor') return
-  imageTagInterceptorRegistered = false
+  disposeImageTagInterceptor?.()
+  disposeImageTagInterceptor = null
   spindle.log.warn('[context-tags] Image-tag interceptor registration was denied.')
 })
 

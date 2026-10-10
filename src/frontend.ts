@@ -198,11 +198,18 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Permissions ──
 
   let grantedPermissions = new Set<string>()
+  let permissionEventVersion = 0
+  let disposed = false
 
   function applyGrantedPermissions(granted: string[]): void {
     const hadInterceptor = grantedPermissions.has('interceptor')
     const hadAppManipulation = grantedPermissions.has('app_manipulation')
     grantedPermissions = new Set(granted)
+    if (grantedPermissions.has('ui_panels')) {
+      if (settings?.showFloatWidget) setupFloatWidget()
+    } else {
+      destroyFloatWidget()
+    }
     const hasInterceptor = grantedPermissions.has('interceptor')
     const hasAppManipulation = grantedPermissions.has('app_manipulation')
 
@@ -214,7 +221,17 @@ export function setup(ctx: SpindleFrontendContext) {
     lightboxPromptLabel.sync()
   }
 
+  const unsubPermissions = ctx.events.on('SPINDLE_PERMISSION_CHANGED', (payload: unknown) => {
+    if (disposed || !payload || typeof payload !== 'object'
+      || !('extensionId' in payload) || payload.extensionId !== 'shutter'
+      || !('allGranted' in payload) || !Array.isArray(payload.allGranted)
+      || !payload.allGranted.every((permission: unknown): permission is string => typeof permission === 'string')) return
+    permissionEventVersion++
+    applyGrantedPermissions(payload.allGranted)
+  })
+  const initialPermissionVersion = permissionEventVersion
   ctx.permissions.getGranted().then((granted: string[]) => {
+    if (disposed || initialPermissionVersion !== permissionEventVersion) return
     applyGrantedPermissions(granted)
     const needed = ['chat_mutation', 'ui_panels', 'interceptor', 'app_manipulation']
     const missing = needed.filter(p => !granted.includes(p))
@@ -227,11 +244,13 @@ export function setup(ctx: SpindleFrontendContext) {
       cancelLabel: 'Not Now',
     }).then(async ({ confirmed }: { confirmed: boolean }) => {
       if (!confirmed) return
+      if (disposed) return
+      const requestPermissionVersion = permissionEventVersion
       try {
         const updated = await ctx.permissions.request(missing, {
           reason: 'Shutter uses chat and panel access for image insertion, interceptor access to remove Shutter Markdown image tags from model prompts, and app manipulation access to show generation prompts in the native image lightbox.',
         })
-        applyGrantedPermissions(updated)
+        if (!disposed && requestPermissionVersion === permissionEventVersion) applyGrantedPermissions(updated)
       } catch {
         ctx.ui.showConfirm({
           title: 'Permissions Not Granted',
@@ -379,7 +398,7 @@ export function setup(ctx: SpindleFrontendContext) {
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
       negativePrompt: returnedNegative
-        || (source?.providerId === providerId ? source.defaultNegativePrompt : ''),
+        || (source && source.providerId === providerId ? source.defaultNegativePrompt : ''),
       promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
       provider: provider || undefined,
       model: model || undefined,
@@ -689,6 +708,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
    function setupFloatWidget() {
     if (floatWidget) return
+    if (!grantedPermissions.has('ui_panels')) return
     if (!settings) return
     const size = WIDGET_SIZES[settings.widgetSize] || 44
     floatWidget = ctx.ui.createFloatWidget({
@@ -891,6 +911,8 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Cleanup ──
 
   return () => {
+    disposed = true
+    unsubPermissions()
     lightboxPromptLabel.dispose()
     comms.dispose()
     unsubBackend()

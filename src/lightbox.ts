@@ -432,13 +432,11 @@ export function createLightboxPromptLabel(deps: {
     // label dies:
     //  - 'now' (prompt hidden via its own ✕, viewer stays open): the strip is
     //    gone, so the image should reclaim the space immediately.
-    //  - 'after-close' (the NATIVE VIEWER is closing: backdrop tap, Escape,
-    //    route change, portal unmount): the image is about to disappear —
-    //    restoring its size first makes it visibly grow for the duration of
-    //    the close animation. Leave the cap in place, and release state once
-    //    the img actually disconnects. If the close never lands (e.g. Escape
-    //    was consumed by a nested dialog), a short grace timeout restores the
-    //    size then — at that point the grow-back is correct, the prompt is gone.
+    //  - 'after-close' (native removal or external label teardown): keep the
+    //    cap while the image remains in the DOM so a closing viewer does not
+    //    visibly grow during its exit animation. Release once it disconnects;
+    //    a short grace timeout restores the image if the label was explicitly
+    //    removed while the native viewer stays open (settings or cleanup).
     const restoreImageInlineStyles = () => {
       if (!img.isConnected) return
       img.style.maxBlockSize = originalMaxBlockSize
@@ -559,11 +557,11 @@ export function createLightboxPromptLabel(deps: {
     ws.zIndex = '10003'
     let labelEl = wrapper.querySelector('.sh-lightbox-prompt') as HTMLElement | null
 
-    // Body-level injection means the portal's unmount no longer removes the
-    // wrapper for us, and the lifecycle tick is a slow 1s fallback — without
-    // this, a dismissed lightbox would leave the label floating over the
-    // chat for up to a second. Watching body childList catches the portal's
-    // removal the moment it happens.
+    // The body-level wrapper must follow the native viewer's actual lifetime,
+    // not Escape or backdrop input: menus and confirmation dialogs can consume
+    // those interactions while leaving the viewer open. Observe body children
+    // for portal removal and its subtree for image removal in persistent
+    // containers, so neither path leaves a stale caption until the slow tick.
     const portalWatcher = new MutationObserver(() => {
       if (!portalRoot.isConnected || !img.isConnected) {
         dismissLabel()
@@ -582,6 +580,7 @@ export function createLightboxPromptLabel(deps: {
       }
     })
     portalWatcher.observe(document.body, { childList: true })
+    portalWatcher.observe(portalRoot, { childList: true, subtree: true })
     
     function setStyleIfChanged(style: CSSStyleDeclaration, prop: string, value: string): void {
       if (style.getPropertyValue(prop) !== value) {
@@ -628,77 +627,6 @@ export function createLightboxPromptLabel(deps: {
     }
     activeLabel = { img, dismiss: dismissLabel }
 
-    // Body-level injection means the prompt no longer disappears just
-    // because the native portal starts its close animation. On mobile that
-    // can leave the prompt visually trailing the viewer by a beat, so remove
-    // it on the same user action that is likely to close the native viewer
-    // instead of waiting for the DOM-removal watcher or lifecycle tether.
-    const dismissOnNativeCloseInteraction = (event: Event): void => {
-      if (dismissed) return
-      const target = event.target as Node | null
-      if (!target) return
-      if (wrapper.contains(target)) return
-      if (!portalRoot.isConnected || !img.isConnected) {
-        dismissLabel()
-        return
-      }
-      if (!portalRoot.contains(target)) return
-
-      const targetEl = target instanceof Element ? target : target.parentElement
-      if (!targetEl) return
-      // Tapping the image itself should keep the prompt.
-      const touchedImage = targetEl.closest?.('img') as HTMLImageElement | null
-      if (touchedImage && touchedImage === img) return
-      // Only a tap on the backdrop itself closes the native viewer — and the
-      // backdrop is recognizable as the element that CONTAINS the image (it
-      // is the flex container centering it). Menu items and confirm-dialog
-      // buttons live inside the portal but are NOT ancestors of the image,
-      // so interacting with them no longer dismisses the prompt. Closes
-      // triggered from inside those layers (e.g. delete → confirm) are
-      // caught by the Escape/route listeners and the portal state watcher.
-      if (!targetEl.contains(img)) return
-      dismissLabel()
-    }
-
-    const dismissOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') dismissLabel()
-    }
-    const dismissOnRouteClose = (): void => dismissLabel()
-
-    document.addEventListener('pointerdown', dismissOnNativeCloseInteraction, true)
-    document.addEventListener('touchstart', dismissOnNativeCloseInteraction, true)
-    document.addEventListener('mousedown', dismissOnNativeCloseInteraction, true)
-    document.addEventListener('click', dismissOnNativeCloseInteraction, true)
-    document.addEventListener('keydown', dismissOnEscape, true)
-    window.addEventListener('popstate', dismissOnRouteClose)
-    window.addEventListener('hashchange', dismissOnRouteClose)
-    cleanupFns.push(() => {
-      document.removeEventListener('pointerdown', dismissOnNativeCloseInteraction, true)
-      document.removeEventListener('touchstart', dismissOnNativeCloseInteraction, true)
-      document.removeEventListener('mousedown', dismissOnNativeCloseInteraction, true)
-      document.removeEventListener('click', dismissOnNativeCloseInteraction, true)
-      document.removeEventListener('keydown', dismissOnEscape, true)
-      window.removeEventListener('popstate', dismissOnRouteClose)
-      window.removeEventListener('hashchange', dismissOnRouteClose)
-    })
-
-    const portalStateWatcher = new MutationObserver(() => {
-      requestAnimationFrame(() => {
-        if (dismissed) return
-        if (!portalRoot.isConnected || !img.isConnected) {
-          dismissLabel()
-          return
-        }
-        if (portalRoot instanceof HTMLElement) {
-          const computed = getComputedStyle(portalRoot)
-          if (computed.display === 'none' || computed.visibility === 'hidden' || Number(computed.opacity) <= 0.01) {
-            dismissLabel()
-          }
-        }
-      })
-    })
-    portalStateWatcher.observe(portalRoot, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden', 'data-state'] })
-    cleanupFns.push(() => portalStateWatcher.disconnect())
 
     // Pure placement: the caption strip was reserved before the image became
     // visible, so this never writes to the image. It keeps the label glued to

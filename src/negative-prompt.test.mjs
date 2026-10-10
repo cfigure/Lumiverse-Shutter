@@ -22,6 +22,7 @@ test('default from another provider is not shown', () => {
 test('missing source or missing default keeps the preview empty', () => {
   assert.equal(resolvePreviewPrompt({ provider: 'swarmui' }, null).negativePrompt, '')
   assert.equal(resolvePreviewPrompt({ provider: 'swarmui' }, { ...source, defaultNegativePrompt: '' }).negativePrompt, '')
+  assert.deepEqual(resolvePreviewPrompt({ prompt: 'forest' }, null), { prompt: 'forest', negativePrompt: '' })
 })
 
 test('late default fills an open untouched empty field', () => {

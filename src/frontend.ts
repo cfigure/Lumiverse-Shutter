@@ -4,6 +4,7 @@ import { clampShutterImageWidth, type Settings } from './settings'
 import { SHUTTER_CSS } from './styles'
 import { createComms } from './comms'
 import { createLightboxPromptLabel } from './lightbox'
+import { resolvePreviewPrompt } from './negative-prompt'
 import { createModals } from './modals'
 import { createSettingsPanel } from './settings-panel'
 import type { GenerationHistoryRecord, GenerationOrigin, GenerationTarget } from './history'
@@ -31,10 +32,16 @@ export type GenerationSkipped = {
   reason: string
 }
 
+export type PromptPreview = {
+  prompt: string
+  negativePrompt: string
+  resolvedNegativePrompt: Promise<string>
+}
+
 // ── Constants ──
 
 const WIDGET_SIZES: Record<string, number> = { small: 44, medium: 56, large: 72, xlarge: 96 }
-const DRAG_THRESHOLD_PX = 5
+const DRAG_THRESHOLD_PX = 4
 const DRAG_THRESHOLD_MS = 300
 const LONG_PRESS_MS = 500
 const PERMISSION_LABELS: Record<string, string> = {
@@ -73,6 +80,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let generating = false
   const comms = createComms(ctx)
   let floatWidget: SpindleFloatWidgetHandle | null = null
+  let cleanupWidgetDrag: (() => void) | null = null
   let inputAction: any = null
   let removeShutterImageLayoutStyle: (() => void) | null = null
 
@@ -190,11 +198,18 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Permissions ──
 
   let grantedPermissions = new Set<string>()
+  let permissionEventVersion = 0
+  let disposed = false
 
   function applyGrantedPermissions(granted: string[]): void {
     const hadInterceptor = grantedPermissions.has('interceptor')
     const hadAppManipulation = grantedPermissions.has('app_manipulation')
     grantedPermissions = new Set(granted)
+    if (grantedPermissions.has('ui_panels')) {
+      if (settings?.showFloatWidget) setupFloatWidget()
+    } else {
+      destroyFloatWidget()
+    }
     const hasInterceptor = grantedPermissions.has('interceptor')
     const hasAppManipulation = grantedPermissions.has('app_manipulation')
 
@@ -206,7 +221,17 @@ export function setup(ctx: SpindleFrontendContext) {
     lightboxPromptLabel.sync()
   }
 
+  const unsubPermissions = ctx.events.on('SPINDLE_PERMISSION_CHANGED', (payload: unknown) => {
+    if (disposed || !payload || typeof payload !== 'object'
+      || !('extensionId' in payload) || payload.extensionId !== 'shutter'
+      || !('allGranted' in payload) || !Array.isArray(payload.allGranted)
+      || !payload.allGranted.every((permission: unknown): permission is string => typeof permission === 'string')) return
+    permissionEventVersion++
+    applyGrantedPermissions(payload.allGranted)
+  })
+  const initialPermissionVersion = permissionEventVersion
   ctx.permissions.getGranted().then((granted: string[]) => {
+    if (disposed || initialPermissionVersion !== permissionEventVersion) return
     applyGrantedPermissions(granted)
     const needed = ['chat_mutation', 'ui_panels', 'interceptor', 'app_manipulation']
     const missing = needed.filter(p => !granted.includes(p))
@@ -219,11 +244,13 @@ export function setup(ctx: SpindleFrontendContext) {
       cancelLabel: 'Not Now',
     }).then(async ({ confirmed }: { confirmed: boolean }) => {
       if (!confirmed) return
+      if (disposed) return
+      const requestPermissionVersion = permissionEventVersion
       try {
         const updated = await ctx.permissions.request(missing, {
           reason: 'Shutter uses chat and panel access for image insertion, interceptor access to remove Shutter Markdown image tags from model prompts, and app manipulation access to show generation prompts in the native image lightbox.',
         })
-        applyGrantedPermissions(updated)
+        if (!disposed && requestPermissionVersion === permissionEventVersion) applyGrantedPermissions(updated)
       } catch {
         ctx.ui.showConfirm({
           title: 'Permissions Not Granted',
@@ -257,6 +284,7 @@ export function setup(ctx: SpindleFrontendContext) {
   type ImageGenerationSource = {
     providerId: string
     model: string
+    defaultNegativePrompt: string
   }
 
   async function fetchJsonBestEffort(url: string, timeoutMs = 2000): Promise<any | null> {
@@ -295,6 +323,8 @@ export function setup(ctx: SpindleFrontendContext) {
     return {
       providerId: connection.provider,
       model: typeof connection.model === 'string' ? connection.model : '',
+      defaultNegativePrompt: typeof connection.default_parameters?.negativePrompt === 'string'
+        ? connection.default_parameters.negativePrompt : '',
     }
   }
 
@@ -359,21 +389,25 @@ export function setup(ctx: SpindleFrontendContext) {
     const [source, providerLabels] = await Promise.all([sourcePromise, providerLabelsPromise])
     const provider = providerId ? (providerLabels.get(providerId) || '') : ''
     const model = source && source.providerId === providerId ? source.model : ''
+    const imageUrl = result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`
+    const returnedNegative = typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : '')
 
     return {
       imageId: result.imageId,
-      imageUrl: result.imageUrl || `/api/v1/image-gen/results/${result.imageId}`,
+      imageUrl,
       handledByNative: !!result.message,
       prompt: typeof result.prompt === 'string' ? result.prompt : (typeof overrides?.prompt === 'string' ? overrides.prompt : ''),
-      negativePrompt: typeof result.negativePrompt === 'string' ? result.negativePrompt : (typeof overrides?.negativePrompt === 'string' ? overrides.negativePrompt : ''),
+      negativePrompt: returnedNegative
+        || (source && source.providerId === providerId ? source.defaultNegativePrompt : ''),
       promptMode: overrides?.skipParse ? 'custom' : (typeof body.promptMode === 'string' ? body.promptMode : 'scene'),
       provider: provider || undefined,
       model: model || undefined,
     }
   }
 
-  async function callPreviewPrompt(chatId: string): Promise<{ prompt: string; negativePrompt: string }> {
+  async function callPreviewPrompt(chatId: string): Promise<PromptPreview> {
     const native = await fetchNativeSettings()
+    const sourcePromise = resolveImageGenerationSource(native.activeImageGenConnectionId)
     const resp = await fetch('/api/v1/image-gen/preview-prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -389,8 +423,10 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!resp.ok) throw new Error(await resp.text())
     const result = await resp.json()
     return {
-      prompt: result.prompt || '',
-      negativePrompt: result.negativePrompt || '',
+      ...resolvePreviewPrompt(result, null),
+      // The connection lookup is best effort. It must not delay the native
+      // parser result or overwrite edits made while the modal is open.
+      resolvedNegativePrompt: sourcePromise.then(source => resolvePreviewPrompt(result, source).negativePrompt),
     }
   }
 
@@ -507,7 +543,7 @@ export function setup(ctx: SpindleFrontendContext) {
         try {
           const preview = await callPreviewPrompt(chatId)
           setGeneratingState(false)
-          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin)
+          modals.openPromptPreviewModal(preview.prompt, preview.negativePrompt, target, isAuto, replace, origin, preview.resolvedNegativePrompt)
         } catch (err: any) {
           setGeneratingState(false)
           if (!isAuto) modals.showErrorModal(parseErrorMessage(err.message))
@@ -672,6 +708,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
    function setupFloatWidget() {
     if (floatWidget) return
+    if (!grantedPermissions.has('ui_panels')) return
     if (!settings) return
     const size = WIDGET_SIZES[settings.widgetSize] || 44
     floatWidget = ctx.ui.createFloatWidget({
@@ -685,7 +722,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const icon = getIconSet(settings.iconTheme)
     btn.innerHTML = settings.widgetStyle === 'mono' ? icon.floatingMono : icon.floatingColor
 
-    let pointerStart: { x: number; y: number; time: number } | null = null
+    let pointerStart: { id: number; x: number; y: number; time: number } | null = null
     let longPressTimer: ReturnType<typeof setTimeout> | null = null
     let longPressFired = false
 
@@ -693,8 +730,8 @@ export function setup(ctx: SpindleFrontendContext) {
       // Primary button / touch only. Right-click is handled exclusively by
       // the contextmenu listener, so it must not arm the tap or long-press
       // tracker (misc: right-click was triggering a generation AND the menu).
-      if (e.button !== 0) return
-      pointerStart = { x: e.clientX, y: e.clientY, time: Date.now() }
+      if (e.button !== 0 || !e.isPrimary) return
+      pointerStart = { id: e.pointerId, x: e.clientX, y: e.clientY, time: Date.now() }
       longPressFired = false
       longPressTimer = setTimeout(() => {
         longPressFired = true
@@ -704,31 +741,46 @@ export function setup(ctx: SpindleFrontendContext) {
       }, LONG_PRESS_MS)
     })
 
-    btn.addEventListener('pointermove', (e) => {
-      if (!pointerStart || !longPressTimer) return
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
-      if (dx > DRAG_THRESHOLD_PX || dy > DRAG_THRESHOLD_PX) {
+    // The host captures the pointer on drag; subsequent moves can bypass the
+    // button. Observe them on window so dragging cannot open our long-press menu.
+    const cancelLongPressOnDrag = (e: PointerEvent) => {
+      if (!pointerStart || e.pointerId !== pointerStart.id || !longPressTimer) return
+      if (Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y) >= DRAG_THRESHOLD_PX) {
         clearTimeout(longPressTimer)
         longPressTimer = null
       }
-    })
+    }
+    const clearCapturedPointer = (e: PointerEvent) => {
+      if (!pointerStart || e.pointerId !== pointerStart.id) return
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+      pointerStart = null
+    }
+    window.addEventListener('pointermove', cancelLongPressOnDrag)
+    window.addEventListener('pointerup', clearCapturedPointer)
+    window.addEventListener('pointercancel', clearCapturedPointer)
+    cleanupWidgetDrag = () => {
+      window.removeEventListener('pointermove', cancelLongPressOnDrag)
+      window.removeEventListener('pointerup', clearCapturedPointer)
+      window.removeEventListener('pointercancel', clearCapturedPointer)
+      if (longPressTimer) clearTimeout(longPressTimer)
+    }
 
     btn.addEventListener('pointerup', (e) => {
+      if (pointerStart && e.pointerId !== pointerStart.id) return
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
       if (e.button !== 0) { pointerStart = null; return }
       if (!pointerStart || longPressFired) { pointerStart = null; return }
-      const dx = Math.abs(e.clientX - pointerStart.x)
-      const dy = Math.abs(e.clientY - pointerStart.y)
+      const distance = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y)
       const dt = Date.now() - pointerStart.time
       pointerStart = null
 
-      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
+      if (distance < DRAG_THRESHOLD_PX && dt < DRAG_THRESHOLD_MS) {
         triggerGenerate(undefined, undefined, false, settings?.defaultAction === 'replace')
       }
     })
 
-    btn.addEventListener('pointercancel', () => {
+    btn.addEventListener('pointercancel', (e) => {
+      if (pointerStart && e.pointerId !== pointerStart.id) return
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
       pointerStart = null
     })
@@ -746,6 +798,8 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function destroyFloatWidget() {
     if (!floatWidget) return
+    cleanupWidgetDrag?.()
+    cleanupWidgetDrag = null
     floatWidget.destroy()
     floatWidget = null
   }
@@ -857,6 +911,8 @@ export function setup(ctx: SpindleFrontendContext) {
   // ── Cleanup ──
 
   return () => {
+    disposed = true
+    unsubPermissions()
     lightboxPromptLabel.dispose()
     comms.dispose()
     unsubBackend()

@@ -131,8 +131,8 @@ Shutter 1.1.1 requires Lumiverse 1.1.0 or newer.
 - Negative-prompt previews safely handle missing connection metadata.
 - **Remove Image Tags from Context** uses the invoking account's saved setting, including shared operator installations and after a restart.
 - Revoking Interceptor permission stops filtering immediately; granting it again restores filtering. Pending settings reads cannot reactivate a revoked interceptor.
-- Live permission changes refresh permission-sensitive settings and lightbox controls. The floating widget waits for UI Panels permission and is recreated after permission is restored.
-- Native lightbox prompt controls remain visible when an inner context menu is dismissed. They are removed when the viewer actually closes; closing a larger viewer does not close an underlying Shutter modal.
+- Live permission changes refresh permission-sensitive controls, and the floating widget waits for UI Panels permission. Refresh the page if the widget does not return after permission is restored.
+- Native lightbox prompt-toolbar dismissal retains the original 1.1.1 behavior. Closing a larger viewer leaves any underlying Shutter modal open.
 
 When upgrading:
 

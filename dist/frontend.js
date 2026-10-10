@@ -1142,7 +1142,6 @@ function createLightboxPromptLabel(deps) {
       }
     });
     portalWatcher.observe(document.body, { childList: true });
-    portalWatcher.observe(portalRoot, { childList: true, subtree: true });
     function setStyleIfChanged(style, prop, value) {
       if (style.getPropertyValue(prop) !== value) {
         style.setProperty(prop, value);
@@ -1183,6 +1182,69 @@ function createLightboxPromptLabel(deps) {
       ctx.dom.uninject(wrapper);
     }
     activeLabel = { img, dismiss: dismissLabel };
+    const dismissOnNativeCloseInteraction = (event) => {
+      if (dismissed)
+        return;
+      const target = event.target;
+      if (!target)
+        return;
+      if (wrapper.contains(target))
+        return;
+      if (!portalRoot.isConnected || !img.isConnected) {
+        dismissLabel();
+        return;
+      }
+      if (!portalRoot.contains(target))
+        return;
+      const targetEl = target instanceof Element ? target : target.parentElement;
+      if (!targetEl)
+        return;
+      const touchedImage = targetEl.closest?.("img");
+      if (touchedImage && touchedImage === img)
+        return;
+      if (!targetEl.contains(img))
+        return;
+      dismissLabel();
+    };
+    const dismissOnEscape = (event) => {
+      if (event.key === "Escape")
+        dismissLabel();
+    };
+    const dismissOnRouteClose = () => dismissLabel();
+    document.addEventListener("pointerdown", dismissOnNativeCloseInteraction, true);
+    document.addEventListener("touchstart", dismissOnNativeCloseInteraction, true);
+    document.addEventListener("mousedown", dismissOnNativeCloseInteraction, true);
+    document.addEventListener("click", dismissOnNativeCloseInteraction, true);
+    document.addEventListener("keydown", dismissOnEscape, true);
+    window.addEventListener("popstate", dismissOnRouteClose);
+    window.addEventListener("hashchange", dismissOnRouteClose);
+    cleanupFns.push(() => {
+      document.removeEventListener("pointerdown", dismissOnNativeCloseInteraction, true);
+      document.removeEventListener("touchstart", dismissOnNativeCloseInteraction, true);
+      document.removeEventListener("mousedown", dismissOnNativeCloseInteraction, true);
+      document.removeEventListener("click", dismissOnNativeCloseInteraction, true);
+      document.removeEventListener("keydown", dismissOnEscape, true);
+      window.removeEventListener("popstate", dismissOnRouteClose);
+      window.removeEventListener("hashchange", dismissOnRouteClose);
+    });
+    const portalStateWatcher = new MutationObserver(() => {
+      requestAnimationFrame(() => {
+        if (dismissed)
+          return;
+        if (!portalRoot.isConnected || !img.isConnected) {
+          dismissLabel();
+          return;
+        }
+        if (portalRoot instanceof HTMLElement) {
+          const computed = getComputedStyle(portalRoot);
+          if (computed.display === "none" || computed.visibility === "hidden" || Number(computed.opacity) <= 0.01) {
+            dismissLabel();
+          }
+        }
+      });
+    });
+    portalStateWatcher.observe(portalRoot, { attributes: true, attributeFilter: ["class", "style", "aria-hidden", "data-state"] });
+    cleanupFns.push(() => portalStateWatcher.disconnect());
     function positionLabel() {
       if (!img.isConnected || !wrapper.isConnected) {
         dismissLabel();

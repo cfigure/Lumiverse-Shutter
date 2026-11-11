@@ -72,9 +72,7 @@ export function createModals(deps: {
 
     const request = (async (): Promise<GeneratedImageAvailability> => {
       try {
-        const probeId = typeof crypto?.randomUUID === 'function'
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        const probeId = ctx.uuid!.v4()
         const response = await fetch(
           `/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`,
           {

@@ -1707,6 +1707,7 @@ function shouldApplyResolvedNegative(current, resolved, edited, dismissed) {
 }
 
 // src/modals.ts
+var imageProbeSequence = 0;
 function createModals(deps) {
   const { ctx, comms } = deps;
   let promptPreviewOpen = false;
@@ -1735,7 +1736,8 @@ function createModals(deps) {
     }
     const request = (async () => {
       try {
-        const probeId = ctx.uuid.v4();
+        const uuid = ctx.uuid;
+        const probeId = (ctx.host?.capabilities?.["frontend-uuid-v1"] ?? 0) >= 1 && typeof uuid?.v4 === "function" ? uuid.v4() : `${Date.now()}-${++imageProbeSequence}`;
         const response = await fetch(`/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`, {
           method: "GET",
           credentials: "same-origin",
@@ -3380,9 +3382,6 @@ function parseErrorMessage(raw) {
   return raw;
 }
 function setup(ctx) {
-  if ((ctx.host?.capabilities?.["frontend-uuid-v1"] ?? 0) < 1 || typeof ctx.uuid?.v4 !== "function") {
-    throw new Error("Shutter 1.1.2 requires the Spindle frontend-uuid-v1 API. Update Lumiverse.");
-  }
   let settings = null;
   let generating = false;
   const comms = createComms(ctx);

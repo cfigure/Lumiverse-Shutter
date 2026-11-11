@@ -1735,7 +1735,7 @@ function createModals(deps) {
     }
     const request = (async () => {
       try {
-        const probeId = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const probeId = ctx.uuid.v4();
         const response = await fetch(`/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`, {
           method: "GET",
           credentials: "same-origin",
@@ -3380,6 +3380,9 @@ function parseErrorMessage(raw) {
   return raw;
 }
 function setup(ctx) {
+  if ((ctx.host?.capabilities?.["frontend-uuid-v1"] ?? 0) < 1 || typeof ctx.uuid?.v4 !== "function") {
+    throw new Error("Shutter 1.1.2 requires the Spindle frontend-uuid-v1 API. Update Lumiverse.");
+  }
   let settings = null;
   let generating = false;
   const comms = createComms(ctx);

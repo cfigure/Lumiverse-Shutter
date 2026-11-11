@@ -124,7 +124,7 @@ These settings apply only when Shutter handles image placement.
 
 ## Compatibility
 
-Shutter **1.1.3** requires Lumiverse **1.3.0 or newer**. The Spindle **`frontend-uuid-v1`** capability is optional. Image-availability checks use `ctx.uuid.v4()` when available and fall back to a timestamp plus a counter to bypass cached responses.
+Shutter **1.1.2** requires Lumiverse **1.3.0 or newer**. The Spindle **`frontend-uuid-v1`** capability is optional. Image-availability checks use `ctx.uuid.v4()` when available and fall back to a timestamp plus a counter to bypass cached responses.
 
 When upgrading:
 

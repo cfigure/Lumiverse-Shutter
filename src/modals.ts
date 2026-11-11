@@ -24,6 +24,8 @@ import {
   type PromptMetadataView,
 } from './history'
 
+let imageProbeSequence = 0
+
 export function createModals(deps: {
   ctx: SpindleFrontendContext
   comms: Comms
@@ -72,7 +74,10 @@ export function createModals(deps: {
 
     const request = (async (): Promise<GeneratedImageAvailability> => {
       try {
-        const probeId = ctx.uuid!.v4()
+        const uuid = ctx.uuid
+        const probeId = (ctx.host?.capabilities?.['frontend-uuid-v1'] ?? 0) >= 1 && typeof uuid?.v4 === 'function'
+          ? uuid.v4()
+          : `${Date.now()}-${++imageProbeSequence}`
         const response = await fetch(
           `/api/v1/image-gen/results/${encodeURIComponent(imageId)}?shutter_probe=${encodeURIComponent(probeId)}`,
           {

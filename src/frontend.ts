@@ -75,10 +75,6 @@ function parseErrorMessage(raw: string): string {
 // ── Setup ──
 
 export function setup(ctx: SpindleFrontendContext) {
-  if ((ctx.host?.capabilities?.['frontend-uuid-v1'] ?? 0) < 1 || typeof ctx.uuid?.v4 !== 'function') {
-    throw new Error('Shutter 1.1.2 requires the Spindle frontend-uuid-v1 API. Update Lumiverse.')
-  }
-
   let settings: Settings | null = null
   let generating = false
   const comms = createComms(ctx)
